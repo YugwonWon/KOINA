@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package baikal.speech;
+
+option go_package = "baikal.ai/proto/baikal/speech";
+option java_multiple_files = true;
+option java_outer_classname = "RecognitionConfigProto";
+
+
+enum AudioEncoding {
+    UNKNOWN_ENCODING = 0;
+    LINEAR16 = 1;
+    // FLAC = 2;
+    // MULAW = 3;
+    // AMR = 4;
+    // AMR_WB = 5;
+    // OGG_OPUS = 6;
+    // SPEEX_WITH_HEADER_BYTE = 7;
+    // WEBM_OPUS = 8;
+}
+
+message RecognitionConfig {
+    // 오디오 포맷(현재는 LINEAR16만 지원)
+    AudioEncoding encoding = 1;
+    // 샘플레이트(Hertz)
+    int32 sample_rate = 2;
+    // 채널 수
+    int32 channel_count = 3;
+    // confidence 표시
+    bool enable_confidence = 4;
+    // 어절 오프셋 표시
+    bool enable_word_time_offsets = 5;
+    // 음절 오프셋 표시
+    bool enable_char_time_offsets = 6;
+    // 음소 오프셋 표시
+    bool enable_phoneme_time_offsets = 7;
+    // 채널 분리해서 각각 음성 인식
+    // bool enable_separate_recognition_per_channel = 8;
+    // 언어 코드
+    // string language_code = 9;
+    // 대체 언어 코드
+    // repeated string alternative_language_codes = 10;
+    // 대체 단어 개수
+    // int32 max_alternatives = 11;
+}
+
+message StreamRecognitionConfig {
+    // 오디오 포맷(현재는 LINEAR16만 지원)
+    AudioEncoding encoding = 1;
+    // 샘플레이트(Hertz)
+    int32 sample_rate = 2;
+    // 채널 수
+    int32 channel_count = 3;
+    // confidence 표시
+    bool enable_confidence = 4;
+    // 어절 오프셋 표시
+    bool enable_word_time_offsets = 5;
+    // 음절 오프셋 표시
+    bool enable_char_time_offsets = 6;
+    // 음소 오프셋 표시
+    bool enable_phoneme_time_offsets = 7;
+    // // 첫 문장 인식 후 종료
+    // bool single_utterance = 9;
+    // 채널 분리해서 각각 음성 인식
+    // bool enable_separate_recognition_per_channel = 9;
+    // 언어 코드
+    // string language_code = 10;
+    // 대체 언어 코드
+    // repeated string alternative_language_codes = 11;
+    // 대체 단어 개수
+    // int32 max_alternatives = 12;
+}

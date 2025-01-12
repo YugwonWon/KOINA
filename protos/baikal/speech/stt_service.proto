@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package baikal.speech;
+
+import "baikal/speech/recognition_config.proto";
+
+option go_package = "baikal.ai/proto/baikal/speech";
+option java_multiple_files = true;
+option java_outer_classname = "RecognizeServiceProto";
+
+
+service RecognizeService {
+    // 음성 인식
+    rpc Recognize (RecognizeRequest)
+        returns (RecognizeResponse) {
+        }
+    // 긴 음성 인식
+    rpc LongRecognize (stream StreamRecognizeRequest)
+        returns (RecognizeResponse) {
+        }
+    // 스트리밍 음성 인식
+    rpc StreamRecognize (stream StreamRecognizeRequest)
+        returns (stream RecognizeResponse) {
+        }
+}
+
+// 음성 인식 요청
+message RecognizeRequest {
+    // 음성 bytes
+    bytes wave = 1;
+    // config
+    baikal.speech.RecognitionConfig config = 2;
+}
+
+// 스트리밍 음성 인식 요청
+message StreamRecognizeRequest {
+    // 음성 bytes
+    oneof streaming_request {
+        baikal.speech.StreamRecognitionConfig config = 1;
+        bytes wave = 2;
+    }
+}
+
+// 음성 인식 응답
+message RecognizeResponse {
+    // 응답 결과
+    message TextSpan {
+        float start = 1;
+        float end = 2;
+        string text = 3;
+    }
+    string transcript = 1;
+    double confidence = 2;
+    repeated TextSpan words = 3;
+    repeated TextSpan chars = 4;
+    repeated TextSpan phonemes = 5;
+}

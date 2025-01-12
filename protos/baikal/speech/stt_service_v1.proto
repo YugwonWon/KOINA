@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package baikal.speech;
+
+option go_package = "baikal.ai/proto/baikal/speech";
+option java_multiple_files = true;
+option java_outer_classname = "STTServiceProto";
+
+
+service STTService {
+    // 음성 인식
+    rpc STT (STTRequest)
+        returns (STTResponse) {
+        }
+}
+  
+// 음성 인식 요청
+message STTRequest {
+    // 음성 파일 원본
+    bytes wave = 1;
+}
+
+// 음성 인식 응답
+message STTResponse {
+    // 응답 결과
+    message TextSpan {
+        float start = 1;
+        float end = 2;
+        string text = 3;
+    }
+    string transcript = 1;
+    double confidence = 2;
+    repeated TextSpan words = 3;
+    repeated TextSpan chars = 4;
+    repeated TextSpan phonemes = 5;
+}

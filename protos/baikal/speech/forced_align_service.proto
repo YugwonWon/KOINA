@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package baikal.speech;
+
+import "baikal/speech/recognition_config.proto";
+
+option go_package = "baikal.ai/proto/baikal/speech";
+option java_multiple_files = true;
+option java_outer_classname = "ForcedAlignServiceProto";
+
+
+service ForcedAlignService {
+    // 강제 정렬
+    rpc ForcedAlign (ForcedAlignRequest)
+        returns (ForcedAlignResponse) {
+        }
+    // 긴 음성 강제 정렬
+    rpc LongForcedAlign (stream LongForcedAlignRequest)
+        returns (ForcedAlignResponse) {
+        }
+}
+
+// 강제 정렬 요청
+message ForcedAlignRequest {
+    // 음성 bytes
+    bytes wave = 1;
+    // 전사 내용
+    string transcript = 2;
+    // config
+    baikal.speech.RecognitionConfig config = 3;
+}
+
+// 스트리밍 강제 정렬 요청
+message LongForcedAlignRequest {
+    // 음성 bytes
+    oneof streaming_request {
+        // config
+        baikal.speech.RecognitionConfig config = 1;
+        // 텍스트
+        string transcript = 2;
+        // 음성
+        bytes wave = 3;
+    }
+}
+
+// 강제 정렬 응답
+message ForcedAlignResponse {
+    // 응답 결과
+    message TextSpan {
+        float start = 1;
+        float end = 2;
+        string text = 3;
+    }
+    string transcript = 1;
+    double confidence = 2;
+    repeated TextSpan words = 3;
+    repeated TextSpan chars = 4;
+    repeated TextSpan phonemes = 5;
+}

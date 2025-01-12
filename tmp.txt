@@ -1,0 +1,15 @@
+
+usage: 	Mtargets [options] win1 lo hi maxerr win2 mind minr < [F0 values]
+
+win1:		cible window length
+lo:		F0 threshold
+hi:		F0 ceiling
+maxerr:		maximum error
+win2:		reduc window length
+mind:		minimal distance
+minr:		minimal frequency ratio
+
+options:		--non-elim-glitch
+
+F0 values, sampled at 10 ms, in ASCII file.
+

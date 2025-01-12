@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package baikal.speech;
+
+option go_package = "baikal.ai/proto/baikal/speech";
+option java_multiple_files = true;
+option java_outer_classname = "VADServiceProto";
+
+
+service VADService {
+  rpc GetVADSpan (VADRequest)
+      returns (GetVADSpanResponse) {
+      }
+}
+
+// 음성 인식 요청
+message VADRequest {
+    // 음성 파일 원본
+    bytes wave = 1;
+}
+
+// 음성 활동 시간
+message GetVADSpanResponse {
+    repeated VoiseSpan voice_spans = 1;
+}
+
+// Voice Span
+message VoiseSpan {
+    float start = 1;
+    float end = 2;
+}
