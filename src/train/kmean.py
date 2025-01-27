@@ -57,26 +57,25 @@ def extract_textgrid_data(filepath):
     # Points(pct) 티어 추출
     points_tier = next((tier for tier in tg.tiers if tier.name == "Points(pct)"), None)
     if points_tier:
-        # 80 ~ 100% 구간의 (time, F0)만 수집 (사용자 요청으로 80으로 변경)
+        # 90 ~ 100% 구간의 (time, F0)만 수집
         points = [(point.time, float(point.mark))
                   for point in points_tier.points
                   if 90 <= point.time <= 100 and point.mark not in ("", "NaN")]
 
-        # 최소 3개의 포인트가 있어야 시계열적 활용 가능
         if len(points) > 2:
             points_sorted = sorted(points, key=lambda x: x[0])
 
-            # TCoG 티어 추출
+            # TCoG 티어
             tcog_tier = next((tier for tier in tg.tiers if tier.name == "TCoG"), None)
             if tcog_tier and len(tcog_tier.points) > 0:
                 tcog_time = tcog_tier.points[0].time
             else:
-                tcog_time = np.nan  # 없으면 NaN
+                tcog_time = np.nan
 
             if gender == "F":
                 points_pct_data_F.append(points_sorted)
                 tcog_data_F.append(tcog_time)
-            else:  # M
+            else:
                 points_pct_data_M.append(points_sorted)
                 tcog_data_M.append(tcog_time)
             return True
@@ -102,9 +101,6 @@ def load_data_from_pkl(filepath):
         return pickle.load(f)
 
 def load_or_process_textgrid_data():
-    """
-    남녀 데이터를 각각 로드/처리
-    """
     global points_pct_data_F, tcog_data_F
     global points_pct_data_M, tcog_data_M
 
@@ -167,7 +163,7 @@ def compute_features(points_pct_data, tcog_data):
             slope = (end_f0 - start_f0) / time_diff
 
         if pd.isna(t_cog):
-            t_cog = -1  # NaN 대체
+            t_cog = -1
 
         feature_vec = [start_f0, end_f0, mean_f0, max_f0, min_f0, slope, t_cog]
         features.append(feature_vec)
@@ -176,12 +172,47 @@ def compute_features(points_pct_data, tcog_data):
     return np.array(features), valid_indices
 
 # -----------------------------
+# (E) 통계량 저장 함수
+# -----------------------------
+def save_basic_stats_to_csv(features_array, feature_names, gender_label):
+    """
+    features_array: shape (N, 7)
+    feature_names : list of 7 feature name strings
+    gender_label  : "Female" or "Male" (used in filename)
+    """
+    if len(features_array) == 0:
+        print(f"No features for {gender_label}, skip stats CSV.")
+        return
+
+    df = pd.DataFrame(features_array, columns=feature_names)
+    # 원하는 통계량: support(count), mean, std, min, median(50%), max
+    # => df.describe()로 대부분 얻을 수 있고, rename/reorder 가능
+    describe_df = df.describe(percentiles=[0.5])  # 기본으로 count, mean, std, min, 50%, max
+    # .describe()의 50% -> median
+    # columns: feature_names
+    # rows: count, mean, std, min, 50%, max
+
+    # 추가로 rename index "50%" -> "median", 그리고 reorder
+    # reindex -> ["count", "mean", "std", "min", "median", "max"]
+    describe_df = describe_df.rename(index={"50%":"median"})
+    # describe_df가 (8행 x 7열). 8행: [count, mean, std, min, 25%, median, 75%, max]
+    # 25%, 75%는 필요 없다면 제거
+    describe_df = describe_df.drop(["25%", "75%"], errors="ignore")
+
+    # 재정렬
+    # 남은 건 ["count", "mean", "std", "min", "median", "max"]
+    final_index_order = ["count", "mean", "std", "min", "median", "max"]
+    describe_df = describe_df.reindex(final_index_order)
+
+    # 저장
+    csv_path = os.path.join(OUTPUT_DIR, f"basic_stats_{gender_label}.csv")
+    describe_df.to_csv(csv_path)
+    print(f"Saved basic stats CSV: {csv_path}")
+
+# -----------------------------
 # (C) K-Means + 결과 시각화
 # -----------------------------
 def plot_elbow_silhouette(features_array, title_suffix):
-    """
-    최적 cluster 수 찾기 (Elbow, Silhouette, Calinski-Harabasz Score를 한 번에 시각화)
-    """
     max_clusters = 8
     cluster_range = range(2, max_clusters+1)
     inertia_values = []
@@ -192,25 +223,19 @@ def plot_elbow_silhouette(features_array, title_suffix):
         kmeans_tmp = KMeans(n_clusters=n_clusters, random_state=42)
         labels_tmp = kmeans_tmp.fit_predict(features_array)
 
-        # Inertia (Elbow용)
         inertia_values.append(kmeans_tmp.inertia_)
 
-        # Silhouette Score (클러스터가 1개면 계산 불가하므로 분기)
         if len(set(labels_tmp)) > 1:
             sil_score = silhouette_score(features_array, labels_tmp)
         else:
             sil_score = -1
         silhouette_scores.append(sil_score)
 
-        # Calinski-Harabasz Score
-        # (CH는 클러스터가 1개 이상이면 계산 가능하나 2개 이상이 일반적)
         ch_score = calinski_harabasz_score(features_array, labels_tmp)
         ch_scores.append(ch_score)
 
-    # figure를 (1행 X 3열) 서브플롯 형태로 만듦
     fig = plt.figure(figsize=(18, 5))
 
-    # (1) Elbow Method
     ax1 = fig.add_subplot(1, 3, 1)
     ax1.plot(cluster_range, inertia_values, marker="o", label="Inertia")
     ax1.set_title(f"Elbow Method [{title_suffix}]")
@@ -219,7 +244,6 @@ def plot_elbow_silhouette(features_array, title_suffix):
     ax1.grid(True)
     ax1.legend()
 
-    # (2) Silhouette Score
     ax2 = fig.add_subplot(1, 3, 2)
     ax2.plot(cluster_range, silhouette_scores, marker="o", color="orange", label="Silhouette")
     ax2.set_title(f"Silhouette Analysis [{title_suffix}]")
@@ -228,7 +252,6 @@ def plot_elbow_silhouette(features_array, title_suffix):
     ax2.grid(True)
     ax2.legend()
 
-    # (3) Calinski-Harabasz Score
     ax3 = fig.add_subplot(1, 3, 3)
     ax3.plot(cluster_range, ch_scores, marker="o", color="green", label="CH Score")
     ax3.set_title(f"Calinski-Harabasz [{title_suffix}]")
@@ -243,36 +266,28 @@ def plot_elbow_silhouette(features_array, title_suffix):
     plt.savefig(os.path.join(OUTPUT_DIR, fname))
     plt.close()
 
-    # silhouette_scores 중 최대값을 주는 cluster 수를 "최적"으로 계속 사용
     optimal_clusters = cluster_range[np.argmax(silhouette_scores)]
     print(f"[{title_suffix}] Optimal clusters by silhouette: {optimal_clusters}")
     return optimal_clusters
 
 def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, title_suffix,
                              use_pca=False):
-    """최종 K-Means 및 결과 시각화 + PCA 옵션"""
     if len(features_array) == 0:
         print(f"[{title_suffix}] No valid items found. Check your data!")
         return
 
-    # 1) elbow & silhouette -> best_k 찾기
     optimal_clusters = plot_elbow_silhouette(features_array, title_suffix)
     print(f"[{title_suffix}] -> Best K from silhouette: {optimal_clusters}")
 
-    # 2) 보고 싶은 클러스터 수 목록 (예: 2, 3, 4)
     cluster_candidates = [2, 3, 4]
-
-    # 중복 방지를 위해, silhouette 분석 결과도 포함할 수 있음
     if optimal_clusters not in cluster_candidates:
         cluster_candidates.append(optimal_clusters)
-    cluster_candidates = sorted(set(cluster_candidates))  # 중복 제거 및 정렬
+    cluster_candidates = sorted(set(cluster_candidates))
 
-    # 3) 지정된 k값 각각에 대해 K-Means & 시각화
     for n_clusters in cluster_candidates:
         kmeans = KMeans(n_clusters=n_clusters, random_state=42)
         labels = kmeans.fit_predict(features_array)
 
-        # (A) 군집별 time-F0 라인 그래프
         plt.figure(figsize=(10, 6))
         colors = plt.cm.get_cmap("tab10", n_clusters)
 
@@ -305,7 +320,7 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
 
         print(f"[{title_suffix}] Clustering with k={n_clusters} done. Saved: {savepath}")
 
-        # (B) 2클러스터 시 centroid 차이
+        # K=2 centroid diff
         if n_clusters == 2:
             centroids = kmeans.cluster_centers_
             diff = np.abs(centroids[0] - centroids[1])
@@ -315,8 +330,8 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
 
             plt.figure(figsize=(8, 6))
             plt.bar(range(len(sorted_diff)), sorted_diff, tick_label=sorted_feature_names)
-            plt.title(f"Feature Differences (2 Clusters) - {title_suffix}")
-            plt.ylabel("Absolute difference in centroid")
+            plt.title(f"Avg Pairwise Centroid Diff (K=2) - {title_suffix}")
+            plt.ylabel("Mean abs difference")
             plt.tight_layout()
             output_path = os.path.join(OUTPUT_DIR, f"centroid_diff_features_{title_suffix}.png")
             plt.savefig(output_path)
@@ -324,7 +339,6 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
 
             print(f"[{title_suffix}] (k=2) centroid difference chart: {output_path}")
 
-        # (C) k>2면 pairwise centroid 차이
         elif n_clusters > 2:
             centroids = kmeans.cluster_centers_
             Kc = n_clusters
@@ -353,7 +367,6 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
 
                 print(f"[{title_suffix}] (k={Kc}) pairwise centroid difference chart: {output_path}")
 
-        # (D) PCA 시각화
         if use_pca:
             pca = PCA(n_components=2)
             X_pca = pca.fit_transform(features_array)
@@ -373,6 +386,7 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
             plt.close()
 
             print(f"[{title_suffix}] (k={n_clusters}) PCA scatter plot: {pcafile}")
+
 
 # -----------------------------
 # (D) main
@@ -394,18 +408,30 @@ if __name__ == '__main__':
 
     # 2) 여성(F) 처리
     features_F, valid_indices_F = compute_features(points_pct_data_F, tcog_data_F)
+    # 통계량 CSV 저장 (스케일링 전)
+    save_basic_stats_to_csv(features_F, feature_names, "Female_raw")
+
     if len(features_F) > 0 and args.use_scaling:
-        # Z-score
         scaler_F = StandardScaler()
         features_F = scaler_F.fit_transform(features_F)
+
+    # 통계량 CSV 저장 (스케일링 후) - 필요시
+    save_basic_stats_to_csv(features_F, feature_names, "Female_scaled")
+
     run_kmeans_and_visualize(features_F, valid_indices_F, points_pct_data_F, 
                              "Female", use_pca=args.use_pca)
 
     # 3) 남성(M) 처리
     features_M, valid_indices_M = compute_features(points_pct_data_M, tcog_data_M)
+    # 통계량 CSV 저장 (스케일링 전)
+    save_basic_stats_to_csv(features_M, feature_names, "Male_raw")
+
     if len(features_M) > 0 and args.use_scaling:
-        # Z-score
         scaler_M = StandardScaler()
         features_M = scaler_M.fit_transform(features_M)
+
+    # 통계량 CSV 저장 (스케일링 후)
+    save_basic_stats_to_csv(features_M, feature_names, "Male_scaled")
+
     run_kmeans_and_visualize(features_M, valid_indices_M, points_pct_data_M, 
                              "Male", use_pca=args.use_pca)
