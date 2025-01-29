@@ -16,7 +16,7 @@ from tqdm import tqdm
 # 전역 경로 설정
 DATA_DIR = "/data1/users/yugwon/SDRW2"
 OUTPUT_DIR = "out/fig/"
-PKL_DIR = "data/pkl/1000-mf"
+PKL_DIR = "data/pkl/1000-mf-90-100"
 
 # 남녀별 TCoG와 Points(pct) 데이터를 저장할 리스트
 points_pct_data_F = []
@@ -214,7 +214,7 @@ def save_basic_stats_to_csv(features_array, feature_names, gender_label):
 # -----------------------------
 def plot_elbow_silhouette(features_array, title_suffix):
     max_clusters = 8
-    cluster_range = range(2, max_clusters+1)
+    cluster_range = range(2, max_clusters + 1)
     inertia_values = []
     silhouette_scores = []
     ch_scores = []
@@ -236,24 +236,33 @@ def plot_elbow_silhouette(features_array, title_suffix):
 
     fig = plt.figure(figsize=(18, 5))
 
+    # Elbow Method
     ax1 = fig.add_subplot(1, 3, 1)
     ax1.plot(cluster_range, inertia_values, marker="o", label="Inertia")
+    for i, val in enumerate(inertia_values):
+        ax1.text(cluster_range[i], val, f"{val:.2f}", ha="center", va="bottom", fontsize=8)  # 레이블 추가
     ax1.set_title(f"Elbow Method [{title_suffix}]")
     ax1.set_xlabel("Number of Clusters")
     ax1.set_ylabel("Inertia")
     ax1.grid(True)
     ax1.legend()
 
+    # Silhouette Analysis
     ax2 = fig.add_subplot(1, 3, 2)
     ax2.plot(cluster_range, silhouette_scores, marker="o", color="orange", label="Silhouette")
+    for i, val in enumerate(silhouette_scores):
+        ax2.text(cluster_range[i], val, f"{val:.2f}", ha="center", va="bottom", fontsize=8)  # 레이블 추가
     ax2.set_title(f"Silhouette Analysis [{title_suffix}]")
     ax2.set_xlabel("Number of Clusters")
     ax2.set_ylabel("Silhouette Score")
     ax2.grid(True)
     ax2.legend()
 
+    # Calinski-Harabasz Score
     ax3 = fig.add_subplot(1, 3, 3)
     ax3.plot(cluster_range, ch_scores, marker="o", color="green", label="CH Score")
+    for i, val in enumerate(ch_scores):
+        ax3.text(cluster_range[i], val, f"{val:.2f}", ha="center", va="bottom", fontsize=8)  # 레이블 추가
     ax3.set_title(f"Calinski-Harabasz [{title_suffix}]")
     ax3.set_xlabel("Number of Clusters")
     ax3.set_ylabel("CH Score")
@@ -329,7 +338,16 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
             sorted_feature_names = [feature_names[i] for i in sorted_idx]
 
             plt.figure(figsize=(8, 6))
-            plt.bar(range(len(sorted_diff)), sorted_diff, tick_label=sorted_feature_names)
+            bars = plt.bar(range(len(sorted_diff)), sorted_diff, tick_label=sorted_feature_names)
+
+            # 막대 위에 값 레이블 추가
+            for bar in bars:
+                height = bar.get_height()  # 각 막대의 높이(값)
+                plt.text(bar.get_x() + bar.get_width() / 2.0,  # x 위치
+                        height,  # y 위치
+                        f'{height:.2f}',  # 표시할 텍스트
+                        ha='center', va='bottom', fontsize=10)  # 텍스트 정렬과 크기 설정
+
             plt.title(f"Avg Pairwise Centroid Diff (K=2) - {title_suffix}")
             plt.ylabel("Mean abs difference")
             plt.tight_layout()
@@ -357,7 +375,16 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
                 sorted_feature_names = [feature_names[i] for i in sorted_idx]
 
                 plt.figure(figsize=(8, 6))
-                plt.bar(range(len(sorted_diff)), sorted_diff, tick_label=sorted_feature_names)
+                bars = plt.bar(range(len(sorted_diff)), sorted_diff, tick_label=sorted_feature_names)
+
+                # 막대 위에 값 레이블 추가
+                for bar in bars:
+                    height = bar.get_height()  # 각 막대의 높이(값)
+                    plt.text(bar.get_x() + bar.get_width() / 2.0,  # x 위치
+                            height,  # y 위치
+                            f'{height:.2f}',  # 표시할 텍스트
+                            ha='center', va='bottom', fontsize=10)  # 텍스트 정렬과 크기 설정
+
                 plt.title(f"Avg Pairwise Centroid Diff (K={Kc}) - {title_suffix}")
                 plt.ylabel("Mean abs difference")
                 plt.tight_layout()
@@ -366,7 +393,6 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
                 plt.close()
 
                 print(f"[{title_suffix}] (k={Kc}) pairwise centroid difference chart: {output_path}")
-
         if use_pca:
             pca = PCA(n_components=2)
             X_pca = pca.fit_transform(features_array)

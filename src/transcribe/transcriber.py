@@ -1,6 +1,5 @@
 
 import os
-import shutil
 import json
 import csv
 import subprocess
@@ -13,7 +12,7 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
-from PIL import Image
+
 from scipy.interpolate import CubicSpline
 
 import parselmouth
