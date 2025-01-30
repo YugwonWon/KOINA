@@ -861,46 +861,81 @@ class IntonationTranscriber:
 
 
 
+def collect_wav_files(base_dir: str):
+    """
+    지정된 디렉토리에서 모든 WAV 파일을 검색하고, 파일명-경로 매핑 딕셔너리를 생성합니다.
+    """
+    wav_dict = {}
+    for root, _, files in os.walk(base_dir):
+        for file in files:
+            if file.lower().endswith(".wav"):
+                file_name = os.path.basename(file)
+                wav_dict[file_name] = os.path.join(root, file)
+    logger.info(f"WAV 파일 {len(wav_dict)}개를 검색했습니다.")
+    return wav_dict
+
+def detect_delimiter(file_path: str):
+    """
+    파일 확장자에 따라 구분자를 반환합니다.
+    """
+    if file_path.endswith(".tsv"):
+        return '\t'
+    elif file_path.endswith(".csv"):
+        return ','
+    else:
+        raise ValueError("지원하지 않는 파일 형식입니다. TSV 또는 CSV 파일만 가능합니다.")
+
 def process_files(tsv_file: str, output_dir: str, momel_path: str, stop_flag):
     """
-    CSV, TSV 파일을 읽어 각 행의 WAV 파일과 전사를 처리하고 TextGrid를 생성
+    CSV 또는 TSV 파일을 읽어 각 행의 파일명을 기반으로 WAV 파일 경로를 매핑하고 처리합니다.
     """
-    logger.info(f"CSV(TSV) 파일을 처리합니다: {tsv_file}")
+    logger.info(f"입력 파일을 처리합니다: {tsv_file}")
     os.makedirs(output_dir, exist_ok=True)
+    
+    # 상대 경로로 out 디렉토리에서 WAV 파일 검색
+    wav_root_dir = "out"  # 상대 경로로 설정, 로컬에서 도커를 실행할 때 wav 파일이 여기에 마운트되어야 한다. 
+    wav_dict = collect_wav_files(wav_root_dir)
+
     try:
+        delimiter = detect_delimiter(tsv_file)
         with open(tsv_file, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f, delimiter='\t')
+            reader = csv.DictReader(f, delimiter=delimiter)
             rows = list(reader)  # tqdm을 사용하기 위해 전체 rows를 리스트로 변환
+
             # logging_redirect_tqdm으로 tqdm 출력 연결
             with logging_redirect_tqdm():
                 for row in tqdm(rows, desc="Processing WAV files", unit="file"):
                     if stop_flag and stop_flag.is_set():  # 작업 중지 플래그 확인
                         logger.info("작업이 중단되었습니다.")
                         return
-                    wav_file = row.get("wav_filepath", "")
+                    
+                    wav_file_name = row.get("wav_filepath", "").strip()
                     transcript = row.get("text", "")
                     sex = row.get("sex", "")
-                    if not os.path.exists(wav_file):
-                        logger.warning(f"WAV 파일이 존재하지 않습니다: {wav_file}")
+                    
+                    if wav_file_name not in wav_dict:
+                        logger.warning(f"WAV 파일을 찾을 수 없습니다: {wav_file_name}")
                         continue
-
-                    base_name = os.path.splitext(os.path.basename(wav_file))[0]
-                    # output_textgrid = os.path.join(output_dir, f"{base_name}.TextGrid")
+                    
+                    wav_file_path = wav_dict[wav_file_name]
+                    base_name = os.path.splitext(os.path.basename(wav_file_path))[0]
+                    
+                    # 출력 디렉토리 생성
                     os.makedirs(f"{output_dir}/{base_name.split('.')[0]}", exist_ok=True)
                     output_textgrid = os.path.join(f"{output_dir}/{base_name.split('.')[0]}", f"{base_name}_{sex}.TextGrid")
-                    # if 'SDRW2200000002.1.1.184' not in output_textgrid:
-                    #     continue
+
+                    # IntonationTranscriber 실행
                     transcriber = IntonationTranscriber(
-                        wav_file=wav_file,
+                        wav_file=wav_file_path,
                         transcript=transcript,
                         sex=sex,
                         output_textgrid=output_textgrid,
                         momel_path=momel_path
                     )
 
-                    logger.info(f"처리 중: {wav_file}")
+                    logger.info(f"처리 중: {wav_file_path}")
                     transcriber.run()
-    except:
+    except Exception as e:
         logger.error(f"파일을 처리하는 도중 에러가 발생했습니다.\n{traceback.format_exc()}")
 
     logger.info("모든 파일 처리가 완료되었습니다.")

@@ -173,15 +173,9 @@ def create_gradio_interface():
                 label="Readme"
             )
 
-        # TSV 파일과 저장 경로
-        with gr.Row():
-            tsv_file = gr.File(label="📁 TSV 파일 선택", type="filepath")
-            output_dir = gr.Textbox(
-                label="📂 저장 경로",
-                value=default_config["output_dir"],
-                placeholder="기본값: out/outputs"
-            )
-
+        # TSV 파일 선택
+        tsv_file = gr.File(label="📁 CSV(TSV) 파일 선택", type="filepath")
+        
         # Pitch Parameters
         gr.Markdown("### 🎛️ Pitch Parameters")  # 섹션 제목 추가
 
@@ -242,7 +236,7 @@ def create_gradio_interface():
                 raise ValueError(f"숫자 값을 입력해야 합니다. {option} 기본값: {default}")
 
         # 작업 시작 함수
-        def start_transcription(tsv_file, output_dir, min_pitch, max_pitch, time_step,
+        def start_transcription(tsv_file, min_pitch, max_pitch, time_step,
                         silence_threshold, voicing_threshold, octave_cost, octave_jump_cost, voice_unvoiced_cost,
                         number_of_candidates, very_accurate,
                         show_spline, fixed_y_range,
@@ -254,7 +248,7 @@ def create_gradio_interface():
                 # 값 검증 및 변환
                 config = {
                     "tsv_file": tsv_file,
-                    "output_dir": output_dir if output_dir else default_config["output_dir"],
+                    "output_dir": default_config["output_dir"],
                     "min_pitch": validate_and_convert(min_pitch, default_config["min_pitch"], float, "Min Pitch"),
                     "max_pitch": validate_and_convert(max_pitch, default_config["max_pitch"], float, "Max Pitch"),
                     "time_step": validate_and_convert(time_step, default_config["time_step"], float, "Pitch Step"),
@@ -305,7 +299,7 @@ def create_gradio_interface():
         start_button.click(
             fn=start_transcription,
             inputs=[
-                tsv_file, output_dir, min_pitch, max_pitch, time_step,
+                tsv_file, min_pitch, max_pitch, time_step,
                 silence_threshold, voicing_threshold, octave_cost, octave_jump_cost, voice_unvoiced_cost,
                 number_of_candidates, very_accurate,
                 show_spline,
@@ -333,4 +327,4 @@ def create_gradio_interface():
 
 if __name__ == '__main__':
     main = create_gradio_interface()
-    main.launch()
+    main.launch(server_name="0.0.0.0", server_port=7861)
