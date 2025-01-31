@@ -21,9 +21,11 @@ PKL_DIR = "data/pkl/1000-mf-90-100"
 # 남녀별 TCoG와 Points(pct) 데이터를 저장할 리스트
 points_pct_data_F = []
 tcog_data_F = []
+base_names_F = []  
 
 points_pct_data_M = []
 tcog_data_M = []
+base_names_M = []  
 
 # 특성 이름 정의 (7차원)
 feature_names = [
@@ -62,7 +64,7 @@ def extract_textgrid_data(filepath):
                   for point in points_tier.points
                   if 90 <= point.time <= 100 and point.mark not in ("", "NaN")]
 
-        if len(points) > 2:
+        if len(points) >= 2:
             points_sorted = sorted(points, key=lambda x: x[0])
 
             # TCoG 티어
@@ -71,13 +73,17 @@ def extract_textgrid_data(filepath):
                 tcog_time = tcog_tier.points[0].time
             else:
                 tcog_time = np.nan
-
+            
+            base_name = os.path.basename(filepath).replace(".TextGrid", "")
+            
             if gender == "F":
                 points_pct_data_F.append(points_sorted)
                 tcog_data_F.append(tcog_time)
+                base_names_F.append(base_name)  # ✅ 파일명 저장 추가
             else:
                 points_pct_data_M.append(points_sorted)
                 tcog_data_M.append(tcog_time)
+                base_names_M.append(base_name) 
             return True
     return False
 
@@ -101,42 +107,48 @@ def load_data_from_pkl(filepath):
         return pickle.load(f)
 
 def load_or_process_textgrid_data():
-    global points_pct_data_F, tcog_data_F
-    global points_pct_data_M, tcog_data_M
+    global points_pct_data_F, tcog_data_F, base_names_F
+    global points_pct_data_M, tcog_data_M, base_names_M  # ✅ 전역 변수 선언 추가
 
     ppf_path = os.path.join(PKL_DIR, "points_pct_data_F.pkl")
     tcf_path = os.path.join(PKL_DIR, "tcog_data_F.pkl")
+    bnf_path = os.path.join(PKL_DIR, "base_names_F.pkl")  # ✅ 파일명 저장
+
     ppm_path = os.path.join(PKL_DIR, "points_pct_data_M.pkl")
     tcm_path = os.path.join(PKL_DIR, "tcog_data_M.pkl")
+    bnm_path = os.path.join(PKL_DIR, "base_names_M.pkl")  # ✅ 파일명 저장
 
-    if (os.path.exists(ppf_path) and os.path.exists(tcf_path)
-        and os.path.exists(ppm_path) and os.path.exists(tcm_path)):
+    if all(os.path.exists(path) for path in [ppf_path, tcf_path, bnf_path, ppm_path, tcm_path, bnm_path]):
         print("Loading data from .pkl files...")
-        points_pct_data_F = load_data_from_pkl(ppf_path)
-        tcog_data_F       = load_data_from_pkl(tcf_path)
-        points_pct_data_M = load_data_from_pkl(ppm_path)
-        tcog_data_M       = load_data_from_pkl(tcm_path)
+        points_pct_data_F = pickle.load(open(ppf_path, "rb"))
+        tcog_data_F = pickle.load(open(tcf_path, "rb"))
+        base_names_F = pickle.load(open(bnf_path, "rb"))  # ✅ 파일명도 로드
+
+        points_pct_data_M = pickle.load(open(ppm_path, "rb"))
+        tcog_data_M = pickle.load(open(tcm_path, "rb"))
+        base_names_M = pickle.load(open(bnm_path, "rb"))  # ✅ 파일명도 로드
     else:
         print("Processing TextGrid files...")
         process_textgrid_files(DATA_DIR)
         os.makedirs(PKL_DIR, exist_ok=True)
-        save_data_to_pkl(ppf_path, points_pct_data_F)
-        save_data_to_pkl(tcf_path, tcog_data_F)
-        save_data_to_pkl(ppm_path, points_pct_data_M)
-        save_data_to_pkl(tcm_path, tcog_data_M)
+        pickle.dump(points_pct_data_F, open(ppf_path, "wb"))
+        pickle.dump(tcog_data_F, open(tcf_path, "wb"))
+        pickle.dump(base_names_F, open(bnf_path, "wb"))  # ✅ 파일명 저장 추가
 
-    return points_pct_data_F, tcog_data_F, points_pct_data_M, tcog_data_M
+        pickle.dump(points_pct_data_M, open(ppm_path, "wb"))
+        pickle.dump(tcog_data_M, open(tcm_path, "wb"))
+        pickle.dump(base_names_M, open(bnm_path, "wb"))  # ✅ 파일명 저장 추가
+
+    return points_pct_data_F, tcog_data_F, base_names_F, points_pct_data_M, tcog_data_M, base_names_M
 
 # -----------------------------
 # (B) feature 벡터 계산
 # -----------------------------
-def compute_features(points_pct_data, tcog_data):
-    features = []
-    valid_indices = []
+def compute_features(points_pct_data, tcog_data, base_names):
+    """특성 벡터 생성"""
+    features, valid_indices, valid_names = [], [], []
     
-    num_items = min(len(points_pct_data), len(tcog_data))
-    
-    for i in range(num_items):
+    for i in range(min(len(points_pct_data), len(tcog_data), len(base_names))):
         item_points = points_pct_data[i]
         t_cog = tcog_data[i]
 
@@ -168,8 +180,9 @@ def compute_features(points_pct_data, tcog_data):
         feature_vec = [start_f0, end_f0, mean_f0, max_f0, min_f0, slope, t_cog]
         features.append(feature_vec)
         valid_indices.append(i)
+        valid_names.append(base_names[i])
 
-    return np.array(features), valid_indices
+    return np.array(features), valid_indices, valid_names
 
 # -----------------------------
 # (E) 통계량 저장 함수
@@ -279,6 +292,20 @@ def plot_elbow_silhouette(features_array, title_suffix):
     print(f"[{title_suffix}] Optimal clusters by silhouette: {optimal_clusters}")
     return optimal_clusters
 
+def save_clustered_features_to_csv(features_array, labels, base_names, gender_label, n_clusters):
+    """클러스터 결과를 원본 데이터와 함께 CSV로 저장"""
+    if len(features_array) == 0:
+        print(f"No features for {gender_label}, skipping CSV output.")
+        return
+    
+    df = pd.DataFrame(features_array, columns=feature_names)
+    df["filename"] = base_names  # ✅ 파일명 추가
+    df["cluster_label"] = labels
+
+    csv_path = os.path.join(OUTPUT_DIR, f"clustered_features_{gender_label}_k{n_clusters}.csv")
+    df.to_csv(csv_path, index=False)
+    print(f"Saved clustered features CSV: {csv_path}")
+    
 def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, title_suffix,
                              use_pca=False):
     if len(features_array) == 0:
@@ -412,6 +439,8 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
             plt.close()
 
             print(f"[{title_suffix}] (k={n_clusters}) PCA scatter plot: {pcafile}")
+            
+        
 
 
 # -----------------------------
@@ -430,10 +459,10 @@ if __name__ == '__main__':
     os.makedirs(PKL_DIR, exist_ok=True)
 
     # 1) 로딩 or 처리
-    points_pct_data_F, tcog_data_F, points_pct_data_M, tcog_data_M = load_or_process_textgrid_data()
+    points_pct_data_F, tcog_data_F, base_names_F, points_pct_data_M, tcog_data_M, base_names_M = load_or_process_textgrid_data()
 
     # 2) 여성(F) 처리
-    features_F, valid_indices_F = compute_features(points_pct_data_F, tcog_data_F)
+    features_F, valid_indices_F, valid_names_F= compute_features(points_pct_data_F, tcog_data_F, base_names_F)
     # 통계량 CSV 저장 (스케일링 전)
     save_basic_stats_to_csv(features_F, feature_names, "Female_raw")
 
@@ -448,7 +477,7 @@ if __name__ == '__main__':
                              "Female", use_pca=args.use_pca)
 
     # 3) 남성(M) 처리
-    features_M, valid_indices_M = compute_features(points_pct_data_M, tcog_data_M)
+    features_M, valid_indices_M, valid_names_M = compute_features(points_pct_data_M, tcog_data_M, base_names_M)
     # 통계량 CSV 저장 (스케일링 전)
     save_basic_stats_to_csv(features_M, feature_names, "Male_raw")
 
@@ -461,3 +490,11 @@ if __name__ == '__main__':
 
     run_kmeans_and_visualize(features_M, valid_indices_M, points_pct_data_M, 
                              "Male", use_pca=args.use_pca)
+    
+    kmeans_F = KMeans(n_clusters=2, random_state=42).fit(features_F)
+    kmeans_M = KMeans(n_clusters=2, random_state=42).fit(features_M)
+
+    labels_F_k2, labels_M_k2 = kmeans_F.labels_, kmeans_M.labels_
+
+    save_clustered_features_to_csv(features_F, labels_F_k2, valid_names_F, "Female", 2)
+    save_clustered_features_to_csv(features_M, labels_M_k2, valid_names_M, "Male", 2)

@@ -31,7 +31,7 @@ class BaikalSTTClient:
     """
     stub = None
     
-    def __init__(self, remote='61.72.69.41:9080'):
+    def __init__(self, remote='gpu2.baikal.ai:9080'):
         if remote.endswith("443"):
             channel = grpc.secure_channel( # insecure_channel
                 remote,
