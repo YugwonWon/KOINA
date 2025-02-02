@@ -76,13 +76,15 @@ class SpeechDataset(Dataset):
 
 # ✅ MLP 모델 정의
 class MLP(nn.Module):
-    def __init__(self, input_dim):
+    def __init__(self, input_dim, dropout_rate=0.2):
         super(MLP, self).__init__()
         self.layers = nn.Sequential(
             nn.Linear(input_dim, 64),
             nn.ReLU(),
+            nn.Dropout(dropout_rate),  # 첫 번째 은닉층 이후 dropout
             nn.Linear(64, 32),
             nn.ReLU(),
+            nn.Dropout(dropout_rate),  # 두 번째 은닉층 이후 dropout
             nn.Linear(32, 2)  # 출력 클래스 2개 (하강/상승)
         )
     
@@ -411,15 +413,15 @@ def evaluate_model(model, test_loader, device, dataset):
 
 # ✅ 실행
 if __name__ == "__main__":
-    # train_loader, valid_loader, test_loader, dataset = load_data("training_data.csv")
+    train_loader, valid_loader, test_loader, dataset = load_data("training_data.csv")
 
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # model = MLP(input_dim=7).to(device)
-    # criterion = nn.CrossEntropyLoss()
-    # optimizer = optim.Adam(model.parameters(), lr=0.001)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = MLP(input_dim=7).to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    # train_model(model, train_loader, valid_loader, criterion, optimizer, device, num_epochs=100)
-    # evaluate_model(model, test_loader, device, dataset)
+    train_model(model, train_loader, valid_loader, criterion, optimizer, device, num_epochs=100)
+    evaluate_model(model, test_loader, device, dataset)
     
     
     # ✅ 데이터 로드 (학습 없이 데이터셋만 로드)
