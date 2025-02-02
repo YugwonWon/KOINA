@@ -1,9 +1,11 @@
 import os
+import pickle
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import shap
 from torch.utils.data import DataLoader, Dataset, Subset
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import StratifiedShuffleSplit
@@ -53,7 +55,8 @@ class SpeechDataset(Dataset):
         self.feature_names = ["start_f0", "end_f0", "mean_f0", "max_f0", "min_f0", "slope", "TCoG"]
         self.X = df[self.feature_names].values
         self.y = df["cluster_label"].values  # 0 = 하강, 1 = 상승
-
+        self.filenames = df["filename"].values  # 파일명 추가
+        
         # ✅ 데이터 정규화
         self.scaler = StandardScaler()
         self.X = self.scaler.fit_transform(self.X)
@@ -88,6 +91,10 @@ class MLP(nn.Module):
 
 # ✅ 데이터 로드 & 층화 샘플링 적용 + Undersampling
 def load_data(csv_file, batch_size=32):
+    from sklearn.model_selection import StratifiedShuffleSplit
+    from imblearn.under_sampling import RandomUnderSampler
+    from torch.utils.data import Subset
+
     dataset = SpeechDataset(csv_file)
 
     # ✅ 층화 샘플링 (Stratified Split)
@@ -113,7 +120,17 @@ def load_data(csv_file, batch_size=32):
     valid_loader = DataLoader(valid_dataset, batch_size=batch_size)
     test_loader = DataLoader(test_dataset, batch_size=batch_size)
 
+    # ✅ 데이터셋 개수 및 레이블 분포 로깅
+    def log_label_distribution(loader, name):
+        labels = [label for _, label in loader.dataset]
+        label_counts = np.bincount(labels)
+        label_distribution = ", ".join([f"{i}: {count}" for i, count in enumerate(label_counts)])
+        logger.info(f"📝 {name} 레이블 분포: {label_distribution}")
+
     logger.info(f"📝 데이터셋 개수: Train: {len(train_dataset)}, Valid: {len(valid_dataset)}, Test: {len(test_dataset)}")
+    log_label_distribution(train_loader, "Train")
+    log_label_distribution(valid_loader, "Valid")
+    log_label_distribution(test_loader, "Test")
 
     return train_loader, valid_loader, test_loader, dataset
 
@@ -210,6 +227,112 @@ def plot_training_curves(train_losses, valid_losses, train_accuracies, valid_acc
     plt.tight_layout()
     plt.savefig(os.path.join(OUTPUT_DIR, "accuracy_curve.png"))
     logger.info("📈 Accuracy curve saved as 'accuracy_curve.png'")
+
+# ✅ SHAP 분석 및 시각화 함수 (Checkpointing 추가)
+def plot_shap_analysis_combined(model, valid_loader, test_loader, dataset, output_dir="out/models"):
+
+    # 모델 예측 함수 정의
+    def model_predict(X):
+        model.eval()
+        with torch.no_grad():
+            X_tensor = torch.tensor(X, dtype=torch.float32).to(next(model.parameters()).device)
+            logits = model(X_tensor).cpu().numpy()
+            return logits
+
+    # ✅ Valid와 Test 데이터 병합
+    data_list = []
+    y_list = []
+    filenames = []
+
+    for loader in [valid_loader, test_loader]:
+        for X_batch, y_batch in loader:
+            data_list.append(X_batch.numpy())
+            y_list.append(y_batch.numpy())
+            filenames += [dataset.filenames[idx] for idx in range(len(y_batch))]
+
+    X_combined = np.concatenate(data_list, axis=0)  # Valid + Test 데이터
+    y_combined = np.concatenate(y_list, axis=0)  # Valid + Test 라벨
+    feature_names = ["start_f0", "end_f0", "mean_f0", "max_f0", "min_f0", "slope", "TCoG"]
+
+    # Checkpoint 파일 경로
+    checkpoint_path = os.path.join(output_dir, "shap_values_combined.pkl")
+
+    # ✅ SHAP Explainer 생성
+    if os.path.exists(checkpoint_path):
+        logger.info(f"✅ SHAP values checkpoint found. Loading from {checkpoint_path}.")
+        with open(checkpoint_path, "rb") as f:
+            shap_values = pickle.load(f)
+        explainer = None  # 저장된 SHAP 값 사용 시 explainer는 필요 없음
+    else:
+        logger.info(f"⏳ Calculating SHAP values for combined dataset. This may take some time...")
+        explainer = shap.KernelExplainer(model_predict, X_combined[:100])  # 첫 100개 샘플로 배경 데이터 구성
+        shap_values = np.array(explainer.shap_values(X_combined))  # SHAP 값 계산
+
+        # ✅ 계산 결과 저장
+        with open(checkpoint_path, "wb") as f:
+            pickle.dump(shap_values, f)
+        logger.info(f"✅ SHAP values saved to {checkpoint_path}.")
+
+    # ✅ SHAP 값 차원 변환 (필요 시)
+    if shap_values.shape[-1] == 2:  # (num_samples, num_features, num_classes)
+        shap_values = np.transpose(shap_values, (2, 0, 1))  # (num_classes, num_samples, num_features)
+
+    if shap_values.shape[0] != 2:  # 클래스가 2개가 아니면 에러 발생
+        raise ValueError(f"Unexpected shape for SHAP values after transformation: {np.shape(shap_values)}")
+
+    # ✅ SHAP Summary Plot (전체 데이터)
+    for i, class_shap_values in enumerate(shap_values):
+        plt.figure()
+        shap.summary_plot(class_shap_values, X_combined, feature_names=feature_names, show=False)
+        if i == 0:
+            suffix = 'downward'
+        else:
+            suffix = 'upward'
+        plt.title(f"SHAP Summary Plot for Class {i}({suffix})")
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f"shap_summary_class_{i}({suffix}).png"))
+        plt.close()
+        logger.info(f"📊 SHAP summary plot saved for Class {i}: 'shap_summary_class_{i}.png'")
+
+    # ✅ 클래스별로 샘플 5개씩 선택 (하강: 0, 상승: 1)
+    class_0_indices = np.where(y_combined == 0)[0][:5]  # 하강 샘플 5개
+    class_1_indices = np.where(y_combined == 1)[0][:5]  # 상승 샘플 5개
+
+    # ✅ explainer 값 처리 (SHAP Explainer가 없으면 기본값 설정)
+    if explainer is not None:
+        expected_value = explainer.expected_value if isinstance(explainer.expected_value, (int, float)) else explainer.expected_value[0]
+    else:
+        expected_value = 0  # explainer가 없으면 기본값으로 0 사용
+
+    for sample_idx in class_0_indices:
+        shap.force_plot(
+            expected_value,
+            shap_values[0][sample_idx],
+            feature_names=feature_names,
+            matplotlib=True
+        )
+        filename = filenames[sample_idx]
+        plt.title(f"SHAP Force Plot for {filename} (Downward Intonation)")
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f"shap_force_downward_{filename}.png"))
+        plt.close()
+        logger.info(f"📊 SHAP force plot saved for {filename} (Downward Intonation)")
+
+    for sample_idx in class_1_indices:
+        shap.force_plot(
+            expected_value,
+            shap_values[1][sample_idx],
+            feature_names=feature_names,
+            matplotlib=True
+        )
+        filename = filenames[sample_idx]
+        plt.title(f"SHAP Force Plot for {filename} (Upward Intonation)")
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f"shap_force_upward_{filename}.png"))
+        plt.close()
+        logger.info(f"📊 SHAP force plot saved for {filename} (Upward Intonation)")
+
+    logger.info("✅ SHAP analysis and visualization completed for combined dataset.")
     
 # ✅ 모델 학습 함수 (수정: Loss/Accuracy 기록)
 def train_model(model, train_loader, valid_loader, criterion, optimizer, device, num_epochs=50, checkpoint_path="out/models/best_checkpoint.pth"):
@@ -220,6 +343,7 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, device,
     for epoch in range(num_epochs):
         model.train()
         total_loss, correct = 0, 0
+        
         for X_batch, y_batch in train_loader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
             optimizer.zero_grad()
@@ -287,13 +411,37 @@ def evaluate_model(model, test_loader, device, dataset):
 
 # ✅ 실행
 if __name__ == "__main__":
+    # train_loader, valid_loader, test_loader, dataset = load_data("training_data.csv")
+
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # model = MLP(input_dim=7).to(device)
+    # criterion = nn.CrossEntropyLoss()
+    # optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+    # train_model(model, train_loader, valid_loader, criterion, optimizer, device, num_epochs=100)
+    # evaluate_model(model, test_loader, device, dataset)
+    
+    
+    # ✅ 데이터 로드 (학습 없이 데이터셋만 로드)
     train_loader, valid_loader, test_loader, dataset = load_data("training_data.csv")
 
+    # ✅ 디바이스 설정
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = MLP(input_dim=7).to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    train_model(model, train_loader, valid_loader, criterion, optimizer, device, num_epochs=100)
-    evaluate_model(model, test_loader, device, dataset)
+    # ✅ 모델 생성 (체크포인트 불러오기 위해 초기화 필요)
+    model = MLP(input_dim=7).to(device)
+
+    # ✅ 체크포인트 불러오기
+    checkpoint_path = "out/models/best_checkpoint.pth"  # 저장된 모델 가중치 경로
+    if os.path.exists(checkpoint_path):
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+        model.eval()  # 평가 모드로 설정
+        logger.info(f"✅ Model checkpoint loaded from '{checkpoint_path}'")
+    else:
+        raise FileNotFoundError(f"❌ Error: No checkpoint found at '{checkpoint_path}'")
+
+    # ✅ 시각화 함수 실행 (학습 없이 바로 분석 진행)
     plot_feature_importance(model, dataset)
+    plot_shap_analysis_combined(model, valid_loader, test_loader, dataset)
+
+    
