@@ -267,7 +267,7 @@ def plot_shap_analysis_combined(model, valid_loader, test_loader, dataset, outpu
         explainer = None  # 저장된 SHAP 값 사용 시 explainer는 필요 없음
     else:
         logger.info(f"⏳ Calculating SHAP values for combined dataset. This may take some time...")
-        explainer = shap.KernelExplainer(model_predict, X_combined[:100])  # 첫 100개 샘플로 배경 데이터 구성
+        explainer = shap.KernelExplainer(model_predict, X_combined)  # 첫 100개 샘플로 배경 데이터 구성
         shap_values = np.array(explainer.shap_values(X_combined))  # SHAP 값 계산
 
         # ✅ 계산 결과 저장
@@ -297,15 +297,15 @@ def plot_shap_analysis_combined(model, valid_loader, test_loader, dataset, outpu
         logger.info(f"📊 SHAP summary plot saved for Class {i}: 'shap_summary_class_{i}.png'")
 
     # ✅ 클래스별로 샘플 5개씩 선택 (하강: 0, 상승: 1)
-    class_0_indices = np.where(y_combined == 0)[0][:5]  # 하강 샘플 5개
-    class_1_indices = np.where(y_combined == 1)[0][:5]  # 상승 샘플 5개
+    class_0_indices = np.where(y_combined == 0)[0][:50]  # 하강 샘플 5개
+    class_1_indices = np.where(y_combined == 1)[0][:50]  # 상승 샘플 5개
 
     # ✅ explainer 값 처리 (SHAP Explainer가 없으면 기본값 설정)
     if explainer is not None:
         expected_value = explainer.expected_value if isinstance(explainer.expected_value, (int, float)) else explainer.expected_value[0]
     else:
         expected_value = 0  # explainer가 없으면 기본값으로 0 사용
-
+    
     for sample_idx in class_0_indices:
         shap.force_plot(
             expected_value,
@@ -314,6 +314,7 @@ def plot_shap_analysis_combined(model, valid_loader, test_loader, dataset, outpu
             matplotlib=True
         )
         filename = filenames[sample_idx]
+        
         plt.title(f"SHAP Force Plot for {filename} (Downward Intonation)")
         plt.tight_layout()
         plt.savefig(os.path.join(output_dir, f"shap_force_downward_{filename}.png"))
@@ -415,20 +416,20 @@ def evaluate_model(model, test_loader, device, dataset):
 if __name__ == "__main__":
     train_loader, valid_loader, test_loader, dataset = load_data("training_data.csv")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
     model = MLP(input_dim=7).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    train_model(model, train_loader, valid_loader, criterion, optimizer, device, num_epochs=100)
+    train_model(model, train_loader, valid_loader, criterion, optimizer, device, num_epochs=150)
     evaluate_model(model, test_loader, device, dataset)
     
     
-    # ✅ 데이터 로드 (학습 없이 데이터셋만 로드)
-    train_loader, valid_loader, test_loader, dataset = load_data("training_data.csv")
+    # # # ✅ 데이터 로드 (학습 없이 데이터셋만 로드)
+    # train_loader, valid_loader, test_loader, dataset = load_data("training_data.csv")
 
-    # ✅ 디바이스 설정
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # # ✅ 디바이스 설정
+    # device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
     # ✅ 모델 생성 (체크포인트 불러오기 위해 초기화 필요)
     model = MLP(input_dim=7).to(device)
