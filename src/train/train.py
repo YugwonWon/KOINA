@@ -91,27 +91,39 @@ class MLP(nn.Module):
     def forward(self, x):
         return self.layers(x)
 
-# ✅ 데이터 로드 & 층화 샘플링 적용 + Undersampling
+# ✅ 데이터 로드 & 층화 샘플링 적용 + Undersampling (성별 정보 반영)
 def load_data(csv_file, batch_size=32):
     from sklearn.model_selection import StratifiedShuffleSplit
     from imblearn.under_sampling import RandomUnderSampler
     from torch.utils.data import Subset
 
+    # 데이터셋 로드
     dataset = SpeechDataset(csv_file)
 
+    # 성별 정보를 filename의 마지막 문자('F' 또는 'M')에서 추출
+    gender = np.array([fname[-1] for fname in dataset.filenames])
+    y_labels = dataset.y.numpy()  # 예: 0 (하강), 1 (상승)
+    
+    # 억양 레이블과 성별 정보를 결합하여 stratification용 레이블 생성 (예: "0_F", "1_M")
+    strat_labels = np.array([f"{y}_{g}" for y, g in zip(y_labels, gender)])
+
     # ✅ 층화 샘플링 (Stratified Split)
-    stratified_split = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=SEED)
+    # 전체 데이터의 10%를 Temp(Valid+Test)로, 90%를 Train으로 분할
+    stratified_split = StratifiedShuffleSplit(n_splits=1, test_size=0.10, random_state=SEED)
     indices = np.arange(len(dataset))
-    y_labels = dataset.y.numpy()
-
-    train_idx, temp_idx = next(stratified_split.split(dataset.X, y_labels))
+    train_idx, temp_idx = next(stratified_split.split(dataset.X, strat_labels))
+    
+    # Temp 데이터를 다시 Valid와 Test로 층화 분할 (50:50 비율로 분할 → 각각 약 5%)
+    temp_strat_labels = strat_labels[temp_idx]
     valid_test_split = StratifiedShuffleSplit(n_splits=1, test_size=0.5, random_state=SEED)
-    valid_idx, test_idx = next(valid_test_split.split(dataset.X[temp_idx], y_labels[temp_idx]))
+    valid_rel_idx, test_rel_idx = next(valid_test_split.split(dataset.X[temp_idx], temp_strat_labels))
+    valid_idx = temp_idx[valid_rel_idx]
+    test_idx = temp_idx[test_rel_idx]
 
-    # ✅ Undersampling 적용 (Train 데이터만)
+    # ✅ Undersampling 적용 (Train 데이터만) – 다수 클래스(억양+성별 조합)가 많을 경우 균형 맞춤
     rus = RandomUnderSampler(random_state=SEED)
-    train_idx, _ = rus.fit_resample(train_idx.reshape(-1, 1), y_labels[train_idx])
-    train_idx = train_idx.flatten()  # 1차원 배열로 변환
+    train_idx_res, _ = rus.fit_resample(train_idx.reshape(-1, 1), strat_labels[train_idx])
+    train_idx = train_idx_res.flatten()  # 1차원 배열로 변환
 
     # ✅ Subset을 이용하여 데이터셋 나누기
     train_dataset = Subset(dataset, train_idx)
@@ -122,12 +134,15 @@ def load_data(csv_file, batch_size=32):
     valid_loader = DataLoader(valid_dataset, batch_size=batch_size)
     test_loader = DataLoader(test_dataset, batch_size=batch_size)
 
-    # ✅ 데이터셋 개수 및 레이블 분포 로깅
+    # ✅ 데이터셋 개수 및 레이블 분포 로깅 (결합 레이블 "y_gender" 기준)
     def log_label_distribution(loader, name):
-        labels = [label for _, label in loader.dataset]
-        label_counts = np.bincount(labels)
-        label_distribution = ", ".join([f"{i}: {count}" for i, count in enumerate(label_counts)])
-        logger.info(f"📝 {name} 레이블 분포: {label_distribution}")
+        full_dataset = loader.dataset.dataset
+        indices = loader.dataset.indices
+        combined_labels = [f"{full_dataset.y[idx].item()}_{full_dataset.filenames[idx][-1]}" for idx in indices]
+        from collections import Counter
+        label_counts = Counter(combined_labels)
+        label_distribution = ", ".join([f"{label}: {count}" for label, count in label_counts.items()])
+        logger.info(f"📝 {name} 레이블 분포 (y_gender): {label_distribution}")
 
     logger.info(f"📝 데이터셋 개수: Train: {len(train_dataset)}, Valid: {len(valid_dataset)}, Test: {len(test_dataset)}")
     log_label_distribution(train_loader, "Train")
@@ -185,20 +200,27 @@ def plot_feature_importance(model, dataset):
     logger.info("📊 Feature correlation matrix saved as 'out/models/feature_correlation_matrix.png'")
 
     # ✅ 레이더 차트 (특성별 평균 중요도)
+    normalized_importance = sorted_importance / max(sorted_importance)
     angles = np.linspace(0, 2 * np.pi, len(feature_names), endpoint=False).tolist()
-    feature_importance_circle = np.concatenate((sorted_importance, [sorted_importance[0]]))
+    feature_importance_circle = np.concatenate((normalized_importance, [normalized_importance[0]]))
     angles += angles[:1]
 
+    # 레이더 차트 생성
     fig, ax = plt.subplots(figsize=(6, 6), subplot_kw={"polar": True})
     ax.fill(angles, feature_importance_circle, color="skyblue", alpha=0.4)
     ax.plot(angles, feature_importance_circle, color="blue", linewidth=2)
-    ax.set_yticks([])
+
+    # ✅ 반지름 축 설정 (정규화된 중요도에 대응)
+    ax.set_yticks(np.linspace(0, 1, 5))  # 정규화된 범위로 반지름 설정
+    ax.set_yticklabels([f"{v:.2f}" for v in np.linspace(0, max(sorted_importance), 5)])  # 원래 중요도 값 표시
     ax.set_xticks(angles[:-1])
     ax.set_xticklabels(sorted_features)
-    ax.set_title("Radar Chart of Feature Importance", va="bottom")
+
+    # 제목과 저장
+    ax.set_title("Radar Chart of Feature Importance (Normalized)", va="bottom")
     plt.tight_layout()
-    plt.savefig(os.path.join("out/models", "feature_importance_radar.png"))
-    logger.info("📊 Feature importance radar chart saved as 'out/models/feature_importance_radar.png'")
+    plt.savefig(os.path.join("out/models", "feature_importance_radar_normalized.png"))
+    logger.info("📊 Feature importance radar chart saved as 'out/models/feature_importance_radar_normalized.png'")
     
 # ✅ 학습 과정 시각화 함수
 def plot_training_curves(train_losses, valid_losses, train_accuracies, valid_accuracies):
@@ -297,8 +319,8 @@ def plot_shap_analysis_combined(model, valid_loader, test_loader, dataset, outpu
         logger.info(f"📊 SHAP summary plot saved for Class {i}: 'shap_summary_class_{i}.png'")
 
     # ✅ 클래스별로 샘플 5개씩 선택 (하강: 0, 상승: 1)
-    class_0_indices = np.where(y_combined == 0)[0][:50]  # 하강 샘플 5개
-    class_1_indices = np.where(y_combined == 1)[0][:50]  # 상승 샘플 5개
+    class_0_indices = np.where(y_combined == 0)[0][:100]  # 하강 샘플 5개
+    class_1_indices = np.where(y_combined == 1)[0][:100]  # 상승 샘플 5개
 
     # ✅ explainer 값 처리 (SHAP Explainer가 없으면 기본값 설정)
     if explainer is not None:
@@ -338,7 +360,7 @@ def plot_shap_analysis_combined(model, valid_loader, test_loader, dataset, outpu
     logger.info("✅ SHAP analysis and visualization completed for combined dataset.")
     
 # ✅ 모델 학습 함수 (수정: Loss/Accuracy 기록)
-def train_model(model, train_loader, valid_loader, criterion, optimizer, device, num_epochs=50, checkpoint_path="out/models/best_checkpoint.pth"):
+def train_model(model, train_loader, valid_loader, criterion, optimizer, device, num_epochs=120, checkpoint_path="out/models/best_checkpoint.pth"):
     best_valid_loss = float("inf")
     train_losses, valid_losses = [], []
     train_accuracies, valid_accuracies = [], []
@@ -425,14 +447,14 @@ if __name__ == "__main__":
     evaluate_model(model, test_loader, device, dataset)
     
     
-    # # # ✅ 데이터 로드 (학습 없이 데이터셋만 로드)
+    # ✅ 데이터 로드 (학습 없이 데이터셋만 로드)
     # train_loader, valid_loader, test_loader, dataset = load_data("training_data.csv")
 
-    # # ✅ 디바이스 설정
+    # ✅ 디바이스 설정
     # device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
     # ✅ 모델 생성 (체크포인트 불러오기 위해 초기화 필요)
-    model = MLP(input_dim=7).to(device)
+    # model = MLP(input_dim=7).to(device)
 
     # ✅ 체크포인트 불러오기
     checkpoint_path = "out/models/best_checkpoint.pth"  # 저장된 모델 가중치 경로
