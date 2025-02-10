@@ -321,6 +321,8 @@ class IntonationTranscriber:
                 start = word.get('start', 0)
                 end = word.get('end', 0)
                 text = word.get('text', '')
+                if end > word_tier.maxTime:
+                    end = word_tier.maxTime
                 word_tier.add(start, end, text)
 
             # phoneme 티어 채우기
@@ -329,6 +331,8 @@ class IntonationTranscriber:
                 start = phoneme.get('start', 0)
                 end = phoneme.get('end', 0)
                 text = phoneme.get('text', '')
+                if end > phoneme_tier.maxTime:
+                    end = phoneme_tier.maxTime
                 phoneme_tier.add(start, end, text)
 
     def save_textgrid(self):
@@ -945,9 +949,9 @@ if __name__ == '__main__':
     from threading import Event
 
     parser = argparse.ArgumentParser(description="억양 자동 전사 도구 (TSV 입력)")
-    parser.add_argument("tsv_file", type=str, nargs='?', default="data/output.tsv",
+    parser.add_argument("tsv_file", type=str, nargs='?', default="data/output copy.tsv",
                         help="입력 TSV 파일 경로 (wavfile_path와 text 컬럼 포함)")
-    parser.add_argument("output_dir", type=str, nargs='?', default='out/outputs2',
+    parser.add_argument("output_dir", type=str, nargs='?', default='out/outputs3',
                         help="출력 TextGrid 파일들이 저장될 디렉토리 경로")
     parser.add_argument("--momel_path", type=str, default="src/lib/momel/momel_linux",
                         help="Momel 실행 파일 경로")
@@ -971,9 +975,9 @@ if __name__ == '__main__':
             print(f"Error creating symbolic link: {e}")
 
     # 사용 예시
-    target_path = "/data1/users/yugwon/SDRW2/"
-    link_path = "out/outputs2"
-    create_symbolic_link(target_path, link_path)
+    # target_path = "/data1/users/yugwon/SDRW2/"
+    # link_path = "out/outputs2"
+    # create_symbolic_link(target_path, link_path)
     
     # 중지 플래그 생성
     stop_flag = Event()
