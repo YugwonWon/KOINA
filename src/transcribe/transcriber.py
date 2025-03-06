@@ -2,6 +2,7 @@
 import os
 import json
 import csv
+import math
 import subprocess
 import traceback
 import numpy as np
@@ -84,7 +85,7 @@ class IntonationTranscriber:
                 config["sil_label"] = "#"
                 config["snd_label"] = "sound"
                 config["sil_thresh"] = -25.0
-                config["momel_parameters"] = "30 60 750 1.04 20 5 0.05"
+                config["momel_parameters"] = "30 60 750 1.01 20 5 0.05"
                 config["momel_path"] = momel_path
                 return config
         logger.warning(f"Config 파일이 없습니다. 기본값을 사용합니다.")
@@ -197,86 +198,155 @@ class IntonationTranscriber:
 
     def run_momel_based_labels(self):
         """
-        Momel을 이용하여 Points 티어를 생성
+        Momel을 이용하여 Points 티어를 생성 (time_step 고정 유지)
         """
         logger.info(f"Momel을 사용하여 Points 티어를 생성합니다... (파일: {self.wav_file})")
         points_tier = PointTier(name="Points", minTime=0, maxTime=self.duration)
         self.textgrid.append(points_tier)
 
         duration = call(self.sound, "Get total duration")
-
         pitch = self.extract_pitch(sex=self.sex)
 
-        matrix = call(pitch, "To Matrix")
-        min_f0 = call(pitch, "Get minimum", 0, 0, "Hertz", "Parabolic")
-        max_f0 = call(pitch, "Get maximum", 0, 0, "Hertz", "Parabolic")
+        # 1) Pitch 객체에서 (프레임별) 시간·f0 추출
+        #    - 모든 프레임은 등간격 (self.settings["time_step"])이라고 가정
+        num_frames = call(pitch, "Get number of frames")
 
-        sil_tg = call(self.sound, "To TextGrid (silences)", 70, self.settings["time_step"], self.settings["sil_thresh"], 0.25, 0.05, self.settings["sil_label"], self.settings["snd_label"])
+        # Praat에서 "Get time from frame number"로 각 프레임의 중앙 시간, "Get value in frame"으로 f0(Hz)
+        frame_times = []
+        frame_f0_values = []
+        for i in range(1, num_frames + 1):
+            t_i = call(pitch, "Get time from frame number", i)
+            f0_i = call(pitch, "Get value in frame", i, "Hertz")
+            if f0_i is None or f0_i <= 0 or math.isnan(f0_i):
+                f0_i = 0.0  # 무음 프레임을 0Hz로 처리
+            frame_times.append(t_i)
+            frame_f0_values.append(f0_i)
+
+        # 2) Doubling/Halving 현상 제거
+        #    - 이미 구현한 remove_doubling_halving()이 '정상' 프레임만 (time, f0)로 반환한다고 가정
+        corrected_times, corrected_f0_values = self.remove_doubling_halving(frame_times, frame_f0_values)
+        # corrected_image_path = os.path.splitext(self.output_textgrid)[0] + "_corrected_doubling_halving_contour.jpg"
+        # self.plot_doubling_halving_corrected_pitch_contour(corrected_times, corrected_f0_values, corrected_image_path)
+        
+        #    - '정상 프레임'인지 아닌지 구분하기 위해 set() 구성
+        #      (부동소수점 문제 예방 위해 round(t, 6) 등 사용 권장)
+        corrected_set = set()
+        for t_val, f0_val in zip(corrected_times, corrected_f0_values):
+            corrected_set.add(round(t_val, 6))
+
+        # 3) 침묵 구간(음성 구간) 계산
+        sil_tg = call(
+            self.sound, "To TextGrid (silences)",
+            70,  # silence threshold
+            self.settings["time_step"],
+            self.settings["sil_thresh"],
+            0.25, 0.05,
+            self.settings["sil_label"],
+            self.settings["snd_label"]
+        )
         n_intervals = call(sil_tg, "Get number of intervals", 1)
-
         snd_intervals = []
         for i in range(1, n_intervals + 1):
             label = call(sil_tg, "Get label of interval", 1, i)
             if label == self.settings["snd_label"]:
-                start_time = call(sil_tg, "Get start time of interval", 1, i)
-                end_time = call(sil_tg, "Get end time of interval", 1, i)
-                snd_intervals.append((start_time, end_time))
+                start_t = call(sil_tg, "Get start time of interval", 1, i)
+                end_t = call(sil_tg, "Get end time of interval", 1, i)
+                snd_intervals.append((start_t, end_t))
+
+        # Doubling/Halving으로 살아남은 f0 값 중 최소/최대
+        valid_f0_vals = [fv for fv in corrected_f0_values if fv > 0]
+        if len(valid_f0_vals) == 0:
+            min_f0, max_f0 = 0.0, 0.0
+        else:
+            min_f0 = min(valid_f0_vals)
+            max_f0 = max(valid_f0_vals)
 
         momel_cmd = self.settings["momel_path"]
-
         temp_f0_min = float('inf')
         temp_f0_max = float('-inf')
 
-        for start_time, end_time in snd_intervals:
+        # 4) 구간별로 Momel 실행
+        for (start_time, end_time) in snd_intervals:
             snd_interval_name = f"part_{start_time:.3f}_{end_time:.3f}"
             f0_file = f"{snd_interval_name}.f0"
             momel_file = f"{snd_interval_name}.model"
 
             os.makedirs('out/models', exist_ok=True)
+            f0_path = os.path.join('out/models', f0_file)
+            momel_path = os.path.join('out/models', momel_file)
+            if os.path.exists(f0_path):
+                os.remove(f0_path)
+            if os.path.exists(momel_path):
+                os.remove(momel_path)
 
-            if os.path.exists(os.path.join('out/models', f0_file)):
-                os.remove(os.path.join('out/models', f0_file))
-            if os.path.exists(os.path.join('out/models', momel_file)):
-                os.remove(os.path.join('out/models', momel_file))
+            # (a) "구간에 해당하는 프레임 범위" 계산
+            #     보통 frame_idx = int( (time - first_frame_time) / time_step + 0.5 ) 형태가 일반적이나
+            #     여기선 간단히 time / time_step 로 사용
+            start_frame_idx = int(start_time / self.settings["time_step"])
+            end_frame_idx = int(end_time / self.settings["time_step"])
+            # 경계 보정
+            if start_frame_idx < 0:
+                start_frame_idx = 0
+            if end_frame_idx >= num_frames:
+                end_frame_idx = num_frames - 1
 
-            for t in range(int(start_time / self.settings["time_step"]), int(end_time / self.settings["time_step"])):
-                try:
-                    pitch_value = call(matrix, "Get value in cell", 1, t + 1)
-                    with open(os.path.join('out/models', f0_file), 'a') as file:
-                        file.write(f"{pitch_value}\n")
-                except:
-                    continue
-
-            # Momel 실행 함수
+            # (b) .f0 파일 생성:
+            #     Momel은 "등간격 샘플"로 한 줄씩 처리하므로,
+            #     [start_frame_idx .. end_frame_idx] 모든 프레임에 대해, Doubling/Halving 아닌 프레임이면 원본 f0,
+            #     제거 프레임이면 0.0을 기록한다
+            with open(f0_path, 'w') as f:
+                for frame_i in range(start_frame_idx, end_frame_idx + 1):
+                    # frame_times[frame_i]가 '살아남은' 프레임인가?
+                    t_rounded = round(frame_times[frame_i], 6)
+                    if t_rounded in corrected_set:
+                        f0_val = frame_f0_values[frame_i]  # 제거되지 않은 프레임
+                    else:
+                        f0_val = 0.0  # Doubling/Halving 제거 or 무음 프레임
+                    f.write(f"{f0_val}\n")
+                    
+            # (c) Momel 실행
             self.run_momel(momel_cmd, momel_file, f0_file)
 
-            with open(os.path.join('out/models', momel_file), 'r') as file:
+            # (d) Momel 결과 파싱하여 Points 티어에 반영
+            with open(momel_path, 'r') as file:
                 lines = file.readlines()
 
             for line in lines:
-                ms, f0 = line.strip().split()
-                ms = float(ms)
-                f0 = float(f0)
-                time = ms / 1000 + start_time
+                ms_str, f0_str = line.strip().split()
+                ms_val = float(ms_str)    # Momel은 ms 단위
+                f0_val = float(f0_str)
 
-                f0 = max(min(f0, max_f0), min_f0)
+                # Momel은 0번째 줄 ~ N번째 줄을 등간격(time_step)으로 여기며,
+                # ms_val은 Momel 내부 계산으로 인한 상대 위치
+                # 실제 시간 = start_time + (ms_val / 1000.0)
+                time_val = start_time + (ms_val / 1000.0)
 
-                time = max(min(time, duration), 0)
+                # f0값 범위 클리핑
+                f0_val = max(min(f0_val, max_f0), min_f0)
 
-                if f0 > temp_f0_max:
-                    temp_f0_max = f0
-                if f0 < temp_f0_min:
-                    temp_f0_min = f0
+                # 시간 범위도 [0, duration]으로 보정
+                if time_val < 0:
+                    time_val = 0
+                if time_val > duration:
+                    time_val = duration
+
+                if f0_val > temp_f0_max:
+                    temp_f0_max = f0_val
+                if f0_val < temp_f0_min:
+                    temp_f0_min = f0_val
 
                 # 중복 포인트 방지
-                existing_points = [point for point in points_tier.points if point.time == time]
-                if not existing_points:
-                    points_tier.add(time, f"{float(f0):.2f}")
+                existing_pts = [pt for pt in points_tier.points if pt.time == time_val]
+                if not existing_pts:
+                    points_tier.add(time_val, f"{f0_val:.2f}")
 
-            os.remove(os.path.join('out/models', f0_file))
-            os.remove(os.path.join('out/models', momel_file))
+            # (e) 임시 파일 정리
+            os.remove(f0_path)
+            os.remove(momel_path)
 
-        # f0 범위 계산 (현재 로직에서는 Ranges 티어를 사용하지 않으므로 생략)
+        logger.info(
+            f"Momel Points 생성 완료. f0 범위: {temp_f0_min:.2f} ~ {temp_f0_max:.2f}, 파일 = {self.wav_file}"
+        )
 
     def run_momel(self, momel_cmd: str, momel_file: str, f0_file: str):
         try:
@@ -400,7 +470,7 @@ class IntonationTranscriber:
         self.textgrid.append(percentage_points_tier)
         logger.info("최종 조정된 Points(pct) 티어가 성공적으로 추가되었습니다.")
 
-    def simplify_pitch_points_by_slope(self, times, f0_values, slope_threshold=33):
+    def simplify_pitch_points_by_slope(self, times, f0_values, slope_threshold=27):
         """
         음높이 포인트를 기울기 기반으로 단순화하여 직선 상의 중간 포인트를 제거합니다.
 
@@ -462,7 +532,10 @@ class IntonationTranscriber:
         f0_values = [float(point.mark) for point in points_tier.points]
         return times, f0_values
 
-    def plot_graph_with_annotations(self, ax, times, f0_values, title, label, show_textgrid=True, show_spline=False, corrected_times=None, corrected_f0_values=None):
+    def plot_graph_with_annotations(
+        self, ax, times, f0_values, title, label,
+        show_textgrid=True, show_spline=False,
+        corrected_times=None, corrected_f0_values=None):
         """
         주어진 음높이 데이터를 사용하여 그래프를 그리고 TextGrid 주석을 추가합니다.
 
@@ -473,48 +546,85 @@ class IntonationTranscriber:
             title: 그래프 제목
             label: 범례에 사용할 레이블
             show_textgrid: 텍스트 그리드를 표시할지 여부
+            show_spline: 스플라인(초록색 점선) 및 Doubling/Halving 제거된 지점 표시 여부
+            corrected_times: Doubling/Halving 제거 후 시간 리스트
+            corrected_f0_values: Doubling/Halving 제거 후 f0 리스트
         """
+
+        # 1) f0=0인 구간 제거(필터링)
+        filtered_times = []
+        filtered_f0 = []
+        for t, f in zip(times, f0_values):
+            if f > 0:  # f0가 0보다 큰 값만 그래프에 표시
+                filtered_times.append(t)
+                filtered_f0.append(f)
+
+        # 2) 기본 그래프(원본 f0)
         if not show_spline:
-            ax.plot(times, f0_values, color='blue', linestyle='-', marker='o', markersize=3, label=label)
+            # 파란 실선 + 동그라미 마커
+            ax.plot(filtered_times, filtered_f0,
+                    linestyle='-', marker='o', markersize=3,
+                    label=label)
 
-
-        # x축 제목을 오른쪽 끝에 배치
+        # x축 레이블(오른쪽 정렬)
         ax.set_xlabel("시간 (초)", labelpad=5, loc='right')
 
-        # Doubling/Halving 제거된 포인트 (show_spline=True일 때만 표시)
+        # 3) Doubling/Halving 제거된 포인트 표시 (스플라인 모드일 때만)
         if show_spline and corrected_times is not None and corrected_f0_values is not None:
-            ax.scatter(corrected_times, corrected_f0_values, color='red', marker='o', s=30, label='Corrected Points')
+            # corrected에서도 0Hz 제거
+            corrected_times_filtered = []
+            corrected_f0_filtered = []
+            for ct, cf in zip(corrected_times, corrected_f0_values):
+                if cf > 0:
+                    corrected_times_filtered.append(ct)
+                    corrected_f0_filtered.append(cf)
 
-        # 스플라인 윤곽 추가
+            # 빨간 점으로 표시
+            ax.scatter(corrected_times_filtered, corrected_f0_filtered,
+                    color='red', marker='o', s=30,
+                    label='Corrected Points')
+
+        # 4) 스플라인 윤곽(초록색 점선)
         if show_spline:
-            ax.plot(times, f0_values, color='green', linestyle='--', linewidth=2, label='Spline Contour')
+            # times/f0_values도 0Hz만 제거하여 그린다 (위에서 필터링한 filtered_times/filtered_f0 사용)
+            ax.plot(filtered_times, filtered_f0,
+                    color='green', linestyle='--', linewidth=2,
+                    label='Spline Contour')
 
-        # # y축 고정(개별 파일의 억양 비교를 위해 필요한 경우 설정)
-        # if os.path.basename(self.wav_file).split('.wav')[0] == 'SDRW2200000001.1.1.1':
-        #     ax.set_ylim(0, 300)
+        # y축 범위 (예시: 0~600Hz)
+        # ax.set_ylim(0, 600)
 
         ax.set_ylabel("Frequency (Hz)")
         ax.set_title(title, fontproperties=self.fontprop)
         ax.legend(loc="upper right")
 
-        # TextGrid 주석 추가 (show_textgrid가 True일 때만)
+        # 5) TextGrid 주석 표시
         if show_textgrid:
-            # word와 phoneme 주석을 x축 제목 아래에 배치
-            word_y_position = -0.20  # word 레이블 위치 (데이터 영역을 기준으로 상대 위치)
-            phoneme_y_position = -0.35  # phoneme 레이블 위치
+            # word, phoneme 티어를 x축 아래에 표시
+            word_y_position = -0.20
+            phoneme_y_position = -0.35
 
             for tier in self.textgrid.tiers:
                 if isinstance(tier, IntervalTier) and tier.name in ['word', 'phoneme']:
                     y_position = word_y_position if tier.name == "word" else phoneme_y_position
                     color = 'red' if tier.name == "word" else 'yellow'
+
                     for interval in tier.intervals:
                         start_time = interval.minTime
-                        mid_time = (start_time + interval.maxTime) / 2
-                        ax.text(mid_time, y_position, interval.mark, ha='center', va='top', color='black', fontproperties=self.fontprop, transform=ax.get_xaxis_transform())
+                        end_time = interval.maxTime
+                        mid_time = (start_time + end_time) / 2
+
+                        # 텍스트(단어나 음소) 표시
+                        ax.text(mid_time, y_position, interval.mark,
+                                ha='center', va='top', color='black',
+                                fontproperties=self.fontprop,
+                                transform=ax.get_xaxis_transform())
+
+                        # 구간 시작 지점에 세로선 추가
                         ax.axvline(x=start_time, color=color, linestyle='--', linewidth=0.5)
 
-        # 하단 여백 조정
-        plt.subplots_adjust(bottom=0.3)  # 하단 여백을 적절하게 조정
+        # 하단 여백 조정 (텍스트그리드 레이블이 겹치지 않도록)
+        plt.subplots_adjust(bottom=0.3)
 
     def plot_pitch_and_textgrid(self, pitch):
         """
@@ -582,7 +692,7 @@ class IntonationTranscriber:
         Doubling 및 Halving이 제거된 음높이 포인트를 사용하여 그래프를 그려서 저장합니다.
         """
         fig, ax = plt.subplots(figsize=(15, 5))
-        self.plot_graph_with_annotations(ax, times, f0_values, "Doubling/Halving 제거된 Momel 음높이 포인트", "Corrected Pitch Points")
+        self.plot_graph_with_annotations(ax, times, f0_values, "배증/반감 제거된 음높이 포인트", "Corrected Pitch Points")
         plt.savefig(output_path, format="jpg", pil_kwargs={"quality": 85})
         plt.close()
         logger.info(f"Doubling/Halving 제거된 음높이 포인트 그래프가 저장되었습니다: {output_path}")
@@ -748,40 +858,32 @@ class IntonationTranscriber:
             self.plot_simplified_pitch_contour(simplified_times, simplified_f0_values, minimalized_image_path)
 
             # 단순화된 음높이로 두 번째 변조된 음성 생성
-            # self.synthesize_pitch_modified_wav(minimalized_wav_path, simplified_times, simplified_f0_values)
-
-            # Doubling/Halving 현상 제거
-            corrected_times, corrected_f0_values = self.remove_doubling_halving(simplified_times, simplified_f0_values)
-
-            # Doubling/Halving 제거된 음높이 포인트 그래프 저장
-            # self.plot_doubling_halving_corrected_pitch_contour(corrected_times, corrected_f0_values, corrected_image_path)
-
-            # Doubling/Halving 제거 후 음성 파일 생성
-            self.synthesize_pitch_modified_wav(corrected_wav_path, corrected_times, corrected_f0_values)
+            self.synthesize_pitch_modified_wav(minimalized_wav_path, simplified_times, simplified_f0_values)
 
             # 최종 음높이 포인트 percentage로 저장
-            self.add_percentage_points_tier(corrected_times, corrected_f0_values)
+            self.add_percentage_points_tier(simplified_times, simplified_f0_values)
             
             # 백분율 그래프 산출
-            self.plot_percentage_pitch_contour(corrected_times, corrected_f0_values, percentage_image_path, y_fixed_range=self.settings["fixed_y_range"])
+            self.plot_percentage_pitch_contour(simplified_times, simplified_f0_values, percentage_image_path, y_fixed_range=self.settings["fixed_y_range"])
             
             # Points 티어를 보정된 데이터로 업데이트
             points_tier.points.clear()
-            for time, f0 in zip(corrected_times, corrected_f0_values):
+            for time, f0 in zip(simplified_times, simplified_f0_values):
                 points_tier.add(time, f"{f0:.2f}")
                 
             # 3차 스플라인 적용 및 결과 출력
-            spline_times, spline_f0_values = self.apply_cubic_spline(corrected_times, corrected_f0_values)
+            spline_times, spline_f0_values = self.apply_cubic_spline(simplified_times, simplified_f0_values)
             
-            self.plot_spline_contour(spline_times, spline_f0_values, spline_image_path, corrected_times, corrected_f0_values, y_fixed_range=self.settings["fixed_y_range"])
+            self.plot_spline_contour(spline_times, spline_f0_values, spline_image_path, simplified_times, simplified_f0_values, y_fixed_range=self.settings["fixed_y_range"])
 
-            # 3차 스플라인 기반으로 WAV 파일 생성
+            # # 3차 스플라인 기반으로 WAV 파일 생성
             # self.synthesize_spline_modified_wav(spline_wav_path, spline_times, spline_f0_values)
 
 
     def remove_doubling_halving(self, times, f0_values, threshold_ratio=0.5):
         """
         Doubling 및 Halving 현상을 감지하고 해당 음높이 포인트를 제거합니다.
+        (마지막으로 관측된 0이 아닌 f0와 현재 f0를 비교)
 
         Parameters:
             times (list): 각 음높이 값에 해당하는 시간 리스트.
@@ -792,21 +894,33 @@ class IntonationTranscriber:
             corrected_times (list): Doubling/Halving이 제거된 시간 리스트.
             corrected_f0_values (list): Doubling/Halving이 제거된 음높이 값 리스트.
         """
+        if not f0_values:
+            return [], []
+
         corrected_times = [times[0]]
         corrected_f0_values = [f0_values[0]]
 
+        # "마지막으로 확인된 0이 아닌 f0" 변수. 초기값은 f0_values[0]가 0이 아니라면 그것을 사용
+        last_nonzero_f0 = f0_values[0] if f0_values[0] != 0 else 0
+
         for i in range(1, len(f0_values)):
-            previous_f0 = corrected_f0_values[-1]
             current_f0 = f0_values[i]
+            current_time = times[i]
+            # 만약 last_nonzero_f0가 0이 아닌데, 이번에 보려는 current_f0도 0이 아니라면
+            # Doubling/Halving 검사를 수행
+            if last_nonzero_f0 != 0 and current_f0 != 0:
+                ratio = current_f0 / last_nonzero_f0
+                if not (threshold_ratio <= ratio <= (1 / threshold_ratio)):
+                    # Doubling/Halving으로 의심, 스킵
+                    continue
 
-            # Doubling/Halving 검출: 이전 값과 현재 값의 비율이 threshold_ratio보다 큰지 확인
-            if not (threshold_ratio <= current_f0 / previous_f0 <= (1 / threshold_ratio)):
-                # Doubling/Halving으로 의심되면 현재 포인트를 제외
-                continue
-
-            # 정상적인 값이면 리스트에 추가
-            corrected_times.append(times[i])
+            # 정상으로 보존할 때만 추가
+            corrected_times.append(current_time)
             corrected_f0_values.append(current_f0)
+
+            # 만약 현재 f0가 0이 아니면 last_nonzero_f0 갱신
+            if current_f0 != 0:
+                last_nonzero_f0 = current_f0
 
         return corrected_times, corrected_f0_values
 
@@ -833,7 +947,9 @@ class IntonationTranscriber:
             and os.path.exists(corrected_wav_path) and os.path.exists(corrected_image_path)):
             logger.info(f"모든 출력 파일이 이미 존재합니다. 건너뜁니다: {self.output_textgrid}")
             return
-
+        # if os.path.exists(self.output_textgrid):
+        #     logger.info(f"건너뜀: {self.output_textgrid}")
+        #     return
         try:
             # 기본 전사 및 TextGrid 생성
             self.perform_alignment()
@@ -844,7 +960,7 @@ class IntonationTranscriber:
             # 기본 음높이와 Momel 기반 그래프 생성
             pitch = self.extract_pitch(sex=self.sex)
             self.plot_pitch_and_textgrid(pitch)
-            # self.plot_momel_pitch_points()
+            self.plot_momel_pitch_points()
             
             
 
@@ -898,7 +1014,7 @@ def process_files(tsv_file: str, output_dir: str, momel_path: str, stop_flag):
     
     # 상대 경로로 out 디렉토리에서 WAV 파일 검색
     wav_root_dir = "out"  # 상대 경로로 설정, 로컬에서 도커를 실행할 때 wav 파일이 여기에 마운트되어야 한다. 
-    wav_dict = collect_wav_files(wav_root_dir)
+    wav_dict = collect_wav_files(output_dir)
 
     try:
         delimiter = detect_delimiter(tsv_file)
@@ -909,39 +1025,44 @@ def process_files(tsv_file: str, output_dir: str, momel_path: str, stop_flag):
             # logging_redirect_tqdm으로 tqdm 출력 연결
             with logging_redirect_tqdm():
                 for row in tqdm(rows, desc="Processing WAV files", unit="file"):
-                    if stop_flag and stop_flag.is_set():  # 작업 중지 플래그 확인
-                        logger.info("작업이 중단되었습니다.")
-                        return
-                    
-                    wav_file_name = row.get("wav_filepath", "").strip()
-                    transcript = row.get("text", "")
-                    sex = row.get("sex", "")
-                    
-                    if wav_file_name not in wav_dict:
-                        logger.warning(f"WAV 파일을 찾을 수 없습니다: {wav_file_name}")
+                    try:
+                        if stop_flag and stop_flag.is_set():  # 작업 중지 플래그 확인
+                            logger.info("작업이 중단되었습니다.")
+                            return
+                        
+                        wav_file_name = row.get("wav_filepath", "").strip()
+                        transcript = row.get("text", "")
+                        sex = row.get("sex", "")
+                        if wav_file_name not in wav_dict:
+                            logger.warning(f"WAV 파일을 찾을 수 없습니다: {wav_file_name}")
+                            continue
+                        
+                        wav_file_path = wav_dict[wav_file_name]
+                        base_name = os.path.splitext(os.path.basename(wav_file_path))[0]
+                        
+                        # 출력 디렉토리 생성
+                        os.makedirs(f"{output_dir}/{base_name.split('.')[0]}", exist_ok=True)
+                        output_textgrid = os.path.join(f"{output_dir}/{base_name.split('.')[0]}", f"{base_name}_{sex}.TextGrid")
+                        
+                        # IntonationTranscriber 실행
+                        transcriber = IntonationTranscriber(
+                            wav_file=wav_file_path,
+                            transcript=transcript,
+                            sex=sex,
+                            output_textgrid=output_textgrid,
+                            momel_path=momel_path
+                        )
+
+                        logger.info(f"처리 중: {wav_file_path}")
+                        transcriber.run()
+                        
+                    except:
+                        logger.error(f"error 건너뜀: {wav_file_path}")
                         continue
                     
-                    wav_file_path = wav_dict[wav_file_name]
-                    base_name = os.path.splitext(os.path.basename(wav_file_path))[0]
-                    
-                    # 출력 디렉토리 생성
-                    os.makedirs(f"{output_dir}/{base_name.split('.')[0]}", exist_ok=True)
-                    output_textgrid = os.path.join(f"{output_dir}/{base_name.split('.')[0]}", f"{base_name}_{sex}.TextGrid")
-
-                    # IntonationTranscriber 실행
-                    transcriber = IntonationTranscriber(
-                        wav_file=wav_file_path,
-                        transcript=transcript,
-                        sex=sex,
-                        output_textgrid=output_textgrid,
-                        momel_path=momel_path
-                    )
-
-                    logger.info(f"처리 중: {wav_file_path}")
-                    transcriber.run()
     except Exception as e:
         logger.error(f"파일을 처리하는 도중 에러가 발생했습니다.\n{traceback.format_exc()}")
-
+        
     logger.info("모든 파일 처리가 완료되었습니다.")
 
 if __name__ == '__main__':
@@ -949,9 +1070,9 @@ if __name__ == '__main__':
     from threading import Event
 
     parser = argparse.ArgumentParser(description="억양 자동 전사 도구 (TSV 입력)")
-    parser.add_argument("tsv_file", type=str, nargs='?', default="data/output copy.tsv",
+    parser.add_argument("tsv_file", type=str, nargs='?', default="data/output.tsv",
                         help="입력 TSV 파일 경로 (wavfile_path와 text 컬럼 포함)")
-    parser.add_argument("output_dir", type=str, nargs='?', default='out/outputs3',
+    parser.add_argument("output_dir", type=str, nargs='?', default='out/outputs4',
                         help="출력 TextGrid 파일들이 저장될 디렉토리 경로")
     parser.add_argument("--momel_path", type=str, default="src/lib/momel/momel_linux",
                         help="Momel 실행 파일 경로")
@@ -975,8 +1096,8 @@ if __name__ == '__main__':
             print(f"Error creating symbolic link: {e}")
 
     # 사용 예시
-    # target_path = "/data1/users/yugwon/SDRW2/"
-    # link_path = "out/outputs2"
+    # target_path = "/data1/users/yugwon/SDRW3/"
+    # link_path = "out/outputs3"
     # create_symbolic_link(target_path, link_path)
     
     # 중지 플래그 생성
