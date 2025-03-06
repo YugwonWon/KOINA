@@ -225,8 +225,8 @@ class IntonationTranscriber:
         # 2) Doubling/Halving 현상 제거
         #    - 이미 구현한 remove_doubling_halving()이 '정상' 프레임만 (time, f0)로 반환한다고 가정
         corrected_times, corrected_f0_values = self.remove_doubling_halving(frame_times, frame_f0_values)
-        # corrected_image_path = os.path.splitext(self.output_textgrid)[0] + "_corrected_doubling_halving_contour.jpg"
-        # self.plot_doubling_halving_corrected_pitch_contour(corrected_times, corrected_f0_values, corrected_image_path)
+        corrected_image_path = os.path.splitext(self.output_textgrid)[0] + "_corrected_doubling_halving_contour.jpg"
+        self.plot_doubling_halving_corrected_pitch_contour(corrected_times, corrected_f0_values, corrected_image_path)
         
         #    - '정상 프레임'인지 아닌지 구분하기 위해 set() 구성
         #      (부동소수점 문제 예방 위해 round(t, 6) 등 사용 권장)
@@ -470,7 +470,7 @@ class IntonationTranscriber:
         self.textgrid.append(percentage_points_tier)
         logger.info("최종 조정된 Points(pct) 티어가 성공적으로 추가되었습니다.")
 
-    def simplify_pitch_points_by_slope(self, times, f0_values, slope_threshold=27):
+    def simplify_pitch_points_by_slope(self, times, f0_values, slope_threshold=33):
         """
         음높이 포인트를 기울기 기반으로 단순화하여 직선 상의 중간 포인트를 제거합니다.
 
@@ -880,49 +880,121 @@ class IntonationTranscriber:
             # self.synthesize_spline_modified_wav(spline_wav_path, spline_times, spline_f0_values)
 
 
-    def remove_doubling_halving(self, times, f0_values, threshold_ratio=0.5):
+    def remove_doubling_halving(
+        self,
+        times,
+        f0_values,
+        threshold_ratio=0.5,
+        min_stable_count=9,
+        global_deviation_factor=2.0
+    ):
         """
-        Doubling 및 Halving 현상을 감지하고 해당 음높이 포인트를 제거합니다.
-        (마지막으로 관측된 0이 아닌 f0와 현재 f0를 비교)
+        Doubling/Halving 현상을 감지하되, '전체 구간 평균 f0'와 비교하여
+        초기에 지나치게 높은(또는 낮은) 값도 자동으로 걸러냅니다.
 
         Parameters:
-            times (list): 각 음높이 값에 해당하는 시간 리스트.
-            f0_values (list): 음높이 값 리스트.
-            threshold_ratio (float): Doubling/Halving 감지 임계값 비율 (논문에서 권장하는 값은 0.5).
+            times (list): 각 음높이 값에 해당하는 시간 리스트
+            f0_values (list): 음높이 값 리스트
+            threshold_ratio (float): Doubling/Halving 감지 임계값 비율
+            min_stable_count (int): 안정 구간으로 인정하기 위해 연속해서
+                                    Doubling/Halving 범위 내에 들어올 필요가 있는 f0 개수
+            global_deviation_factor (float): 전체 평균의 몇 배 이상 벗어나면
+                                            초기 구간에서 제외할지 결정 (예: 2.0 => 2배 이상)
 
         Returns:
-            corrected_times (list): Doubling/Halving이 제거된 시간 리스트.
-            corrected_f0_values (list): Doubling/Halving이 제거된 음높이 값 리스트.
+            corrected_times (list): Doubling/Halving이 제거된 시간 리스트
+            corrected_f0_values (list): Doubling/Halving이 제거된 음높이 값 리스트
         """
+
         if not f0_values:
             return [], []
 
-        corrected_times = [times[0]]
-        corrected_f0_values = [f0_values[0]]
+        # 1) 전체 평균 f0 계산 (0 제외)
+        nonzero_f0 = [fv for fv in f0_values if fv > 0]
+        if not nonzero_f0:
+            # 전부 무음이면 전부 제외
+            return [], []
 
-        # "마지막으로 확인된 0이 아닌 f0" 변수. 초기값은 f0_values[0]가 0이 아니라면 그것을 사용
-        last_nonzero_f0 = f0_values[0] if f0_values[0] != 0 else 0
+        global_avg_f0 = sum(nonzero_f0) / len(nonzero_f0)  # 단순 평균
+        # (필요하다면 중위수나 상위 90% 절단평균 등을 사용할 수도 있음)
 
-        for i in range(1, len(f0_values)):
-            current_f0 = f0_values[i]
-            current_time = times[i]
-            # 만약 last_nonzero_f0가 0이 아닌데, 이번에 보려는 current_f0도 0이 아니라면
-            # Doubling/Halving 검사를 수행
-            if last_nonzero_f0 != 0 and current_f0 != 0:
-                ratio = current_f0 / last_nonzero_f0
-                if not (threshold_ratio <= ratio <= (1 / threshold_ratio)):
-                    # Doubling/Halving으로 의심, 스킵
+        # 2) Doubling/Halving + 안정 구간 로직
+        corrected_times = []
+        corrected_f0_values = []
+
+        stable_start_index = None
+        temp_buffer = []  # (t, f) 임시 버퍼
+
+        for i in range(len(f0_values)):
+            t = times[i]
+            f = f0_values[i]
+
+            if f <= 0:
+                # 무음(0Hz) -> 안정 구간을 아직 찾지 못했다면 그냥 버린다
+                if stable_start_index is None:
+                    continue
+                else:
+                    # 안정 구간 진입 뒤에는 Doubling/Halving 로직
+                    # -> 0Hz는 어차피 ratio 검사 불가, 아래에서 처리
+                    pass
+
+            # (B) 초기에 '글로벌 평균 x factor'를 초과하면 제외
+            #     아직 안정 구간에 들어가기 전이라면, 이 값이 튀었는지 추가로 판정
+            if stable_start_index is None and f > 0:
+                # 글로벌 평균 대비 너무 높거나
+                if f > global_avg_f0 * global_deviation_factor:
+                    # 아예 넣지 않고 continue
                     continue
 
-            # 정상으로 보존할 때만 추가
-            corrected_times.append(current_time)
-            corrected_f0_values.append(current_f0)
+            if stable_start_index is None:
+                # 아직 안정 구간 시작 전
+                # 일단 temp_buffer에 f>0인 값들을 축적
+                if f > 0:
+                    temp_buffer.append((t, f))
 
-            # 만약 현재 f0가 0이 아니면 last_nonzero_f0 갱신
-            if current_f0 != 0:
-                last_nonzero_f0 = current_f0
+                # 버퍼가 min_stable_count 길이에 도달하면
+                # 연속 Doubling/Halving 검사
+                if len(temp_buffer) >= min_stable_count:
+                    all_stable = True
+                    for j in range(1, len(temp_buffer)):
+                        prev_f0 = temp_buffer[j-1][1]
+                        curr_f0 = temp_buffer[j][1]
+                        if prev_f0 > 0 and curr_f0 > 0:
+                            ratio = curr_f0 / prev_f0
+                            if not (threshold_ratio <= ratio <= 1.0/threshold_ratio):
+                                all_stable = False
+                                break
+                    if all_stable:
+                        # 안정 구간 발견 -> 이 시점부터 corrected에 넣기
+                        stable_start_index = i - (min_stable_count - 1)
+                        # 버퍼 내용을 통째로 corrected로 이동
+                        for (bt, bf) in temp_buffer:
+                            corrected_times.append(bt)
+                            corrected_f0_values.append(bf)
+                        temp_buffer.clear()
+            else:
+                # 안정 구간 진입 후 Doubling/Halving 판정
+                if corrected_f0_values:
+                    prev_f0 = corrected_f0_values[-1]
+                else:
+                    prev_f0 = 0
+
+                # prev_f0, f 둘 다 0이 아닌 경우에만 ratio 검사
+                if prev_f0 > 0 and f > 0:
+                    ratio = f / prev_f0
+                    if not (threshold_ratio <= ratio <= 1.0/threshold_ratio):
+                        # Doubling/Halving 의심 -> 제외
+                        continue
+
+                # 정상 -> 추가
+                corrected_times.append(t)
+                corrected_f0_values.append(f)
+
+        # 혹시 끝까지 안정 구간을 못 찾으면(temp_buffer가 비정상) -> temp_buffer 내용 버림
+        # 필요하면 "안정 구간 없어도 마지막 부분만이라도 살릴까?" 라는 식의 커스터마이징 가능
 
         return corrected_times, corrected_f0_values
+
 
     def run(self):
         """
