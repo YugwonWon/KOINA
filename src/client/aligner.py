@@ -10,12 +10,9 @@ from google.protobuf.json_format import MessageToDict
 from tqdm import tqdm
 
 from lib.baikal.speech import recognition_config_pb2 as config_pb
-from lib.baikal.speech import stt_service_pb2 as service_pb
 from lib.baikal.speech import stt_service_pb2_grpc as service_grpcpb
 from lib.baikal.speech import forced_align_service_pb2 as align_service_pb
 from lib.baikal.speech import forced_align_service_pb2_grpc as align_service_grpcpb
-
-from analyze.praat import Praat
 
 from utils.logger import main_logger
 
@@ -157,7 +154,7 @@ if __name__ in '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("wav_file", nargs='?', default='data/sample/sample_sound.wav', help="wav file", type=str)
     parser.add_argument("-host", dest="host", help="remote server host",
-                        default="114.110.134.206",
+                        default="localhost",
                         type=str)
     parser.add_argument("-p", dest="port", help="remote server port",
                         default=9080,
@@ -165,7 +162,7 @@ if __name__ in '__main__':
     parser.set_defaults(wav_file='data/sample/sample_sound.wav')
     args = parser.parse_args()
         
-    transcript = "추워"
+    transcript = "테스트 텍스트"
     client = BaikalSTTClient(f'{args.host}:{args.port}')
 
     res = client.align(wav_file=args.wav_file, transcript=transcript)

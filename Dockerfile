@@ -43,7 +43,6 @@ RUN pip3 install --upgrade pip && pip3 install \
 
 # 5. 작업 디렉토리 설정 및 코드 복사
 WORKDIR /koina
-COPY src/analyze /koina/src/analyze
 COPY src/client /koina/src/client
 COPY src/lib /koina/src/lib
 COPY src/transcribe /koina/src/transcribe

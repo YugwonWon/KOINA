@@ -158,14 +158,15 @@ def create_gradio_interface():
     with gr.Blocks(css=".custom-box {margin-top: 20px;}") as main:
         # 프로그램 제목과 설명
         with gr.Column():
-            gr.Label(value="✨ 한국어 억양 자동 전사 클라이언트 ✨", label="")
+            gr.Label(value="✨ 한국어 억양 주석기 클라이언트✨", label="")
             gr.Textbox(
                 value=(
-                    "📂 이 프로그램은 음성 파일 경로와 음성 전사 텍스트 칼럼으로 구성된 CSV(TSV)파일을 입력으로 사용하여 "
+                    "📂 이 프로그램은 음성 파일 경로와 음성 전사 텍스트 칼럼으로 구성된 CSV(TSV)파일을 입력으로 사용하여"
                     "발화에서 억양을 분석하고 자동으로 전사합니다.\n\n"
                     "👉 사용 방법:\n"
-                    "1️⃣ CSV(TSV) 파일을 선택하세요.\n"
-                    "2️⃣ 저장 경로와 옵션 값을 확인한 뒤 작업 시작 버튼을 누르세요."
+                    "1️⃣ CSV(TSV) 파일을 선택하세요.(칼럼 구성 예: wav_filename(*.wav), sex(M,F), text)\n"
+                    "2️⃣ 매개변수(parameter) 값을 설정하고 작업 시작 버튼을 누르세요.\n"
+                    "3️⃣ 작업을 중단하려면 중단 버튼을 누르세요. 재시작시 해당 음성의 모든 산출물이 존재한다면 건너뜁니다."
                 ),
                 lines=6,
                 interactive=False,

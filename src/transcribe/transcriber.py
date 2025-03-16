@@ -848,8 +848,8 @@ class IntonationTranscriber:
             # Momel Points 티어에서 시간과 음높이 값을 가져옴
             times, f0_values = self.get_momel_pitch_points(points_tier)
 
-            # 첫 번째 변조된 음성 생성
-            self.synthesize_pitch_modified_wav(modified_wav_path, times, f0_values)
+            # # 첫 번째 변조된 음성 생성
+            # self.synthesize_pitch_modified_wav(modified_wav_path, times, f0_values)
 
             # 기울기 기반 단순화 적용
             simplified_times, simplified_f0_values = self.simplify_pitch_points_by_slope(times, f0_values)
@@ -1002,15 +1002,15 @@ class IntonationTranscriber:
         spline_wav_path = os.path.splitext(self.output_textgrid)[0] + "_spline_contour.wav"
 
         # 모든 출력 파일이 존재하는 경우, 건너뜁니다.
-        if (os.path.exists(self.output_textgrid) and os.path.exists(output_pitch_contour)
-            and os.path.exists(output_momel_pitch_contour) and os.path.exists(modified_wav_path)
-            and os.path.exists(output_momel_pitch_contour_minimalized) and os.path.exists(modified_minimalization_wav_path)
-            and os.path.exists(corrected_wav_path) and os.path.exists(corrected_image_path)):
+        if (os.path.exists(self.output_textgrid) and 
+            os.path.exists(output_pitch_contour) and 
+            os.path.exists(output_momel_pitch_contour) and
+            os.path.exists(output_momel_pitch_contour_minimalized) and
+            os.path.exists(modified_minimalization_wav_path) and 
+            os.path.exists(corrected_image_path)):
             logger.info(f"모든 출력 파일이 이미 존재합니다. 건너뜁니다: {self.output_textgrid}")
             return
-        # if os.path.exists(self.output_textgrid):
-        #     logger.info(f"건너뜀: {self.output_textgrid}")
-        #     return
+
         try:
             # 기본 전사 및 TextGrid 생성
             self.perform_alignment()
@@ -1023,8 +1023,6 @@ class IntonationTranscriber:
             self.plot_pitch_and_textgrid(pitch)
             self.plot_momel_pitch_points()
             
-            
-
             # Momel의 Points 티어를 기반으로 변조 및 단순화 적용
             self.apply_momel_pitch_modulation(points_tier_name="Points",
                                             modified_wav_path=modified_wav_path,
@@ -1039,6 +1037,7 @@ class IntonationTranscriber:
         except Exception as e:
             logger.error(f"억양 전사 중 오류 발생: {e}")
             logger.error(traceback.format_exc())
+            return
 
 
 
@@ -1064,7 +1063,7 @@ def detect_delimiter(file_path: str):
     elif file_path.endswith(".csv"):
         return ','
     else:
-        raise ValueError("지원하지 않는 파일 형식입니다. TSV 또는 CSV 파일만 가능합니다.")
+        raise ValueError("지원하지 않는 파일 형식(확장자)입니다. TSV 또는 CSV 파일만 가능합니다.")
 
 def process_files(tsv_file: str, output_dir: str, momel_path: str, stop_flag):
     """
@@ -1091,7 +1090,7 @@ def process_files(tsv_file: str, output_dir: str, momel_path: str, stop_flag):
                             logger.info("작업이 중단되었습니다.")
                             return
                         
-                        wav_file_name = row.get("wav_filepath", "").strip()
+                        wav_file_name = row.get("wav_filename", "").strip()
                         transcript = row.get("text", "")
                         sex = row.get("sex", "")
                         if wav_file_name not in wav_dict:
