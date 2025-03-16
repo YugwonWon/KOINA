@@ -16,7 +16,7 @@ from tqdm import tqdm
 # 전역 경로 설정
 DATA_DIR = "/data1/users/yugwon/SDRW2"
 OUTPUT_DIR = "out/fig/"
-PKL_DIR = "data/pkl/1000-mf-90-100"
+PKL_DIR = "data/pkl/1000-mf-90-100-backup"
 
 # 남녀별 TCoG와 Points(pct) 데이터를 저장할 리스트
 points_pct_data_F = []
@@ -376,6 +376,8 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
                         ha='center', va='bottom', fontsize=10)  # 텍스트 정렬과 크기 설정
 
             plt.title(f"Avg Pairwise Centroid Diff (K=2) - {title_suffix}")
+            plt.ylim(0, 2.5)
+            plt.yticks(np.arange(0, 2.6, 0.5))
             plt.ylabel("Mean abs difference")
             plt.tight_layout()
             output_path = os.path.join(OUTPUT_DIR, f"centroid_diff_features_{title_suffix}.png")
@@ -413,6 +415,8 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
                             ha='center', va='bottom', fontsize=10)  # 텍스트 정렬과 크기 설정
 
                 plt.title(f"Avg Pairwise Centroid Diff (K={Kc}) - {title_suffix}")
+                plt.ylim(0, 2.5)
+                plt.yticks(np.arange(0, 2.6, 0.5))
                 plt.ylabel("Mean abs difference")
                 plt.tight_layout()
                 output_path = os.path.join(OUTPUT_DIR, f"avg_pairwise_centroid_k{Kc}_{title_suffix}.png")
