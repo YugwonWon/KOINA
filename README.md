@@ -1,6 +1,6 @@
 # KOINA (Korean Intonation Annotator)
 <p align="center">
-  <img src="./docs/logo.jpg" width="300"/>
+  <img src="https://github.com/user-attachments/assets/6e4d95ca-9c29-46cb-b543-d0d3bf245f25" width="400">
 </p>
 
 KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억양을 자동으로 주석해주는 도구입니다. 음성 데이터를 빠르고 일관된 방식으로 처리하여 연구자의 수작업 부담을 덜어주기 위한 도구입니다.
