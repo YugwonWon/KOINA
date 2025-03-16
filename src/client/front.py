@@ -158,14 +158,15 @@ def create_gradio_interface():
     with gr.Blocks(css=".custom-box {margin-top: 20px;}") as main:
         # 프로그램 제목과 설명
         with gr.Column():
-            gr.Label(value="✨ 한국어 억양 자동 전사 클라이언트 ✨", label="")
+            gr.Label(value="✨ 한국어 억양 주석기 클라이언트✨", label="")
             gr.Textbox(
                 value=(
-                    "📂 이 프로그램은 음성 파일 경로와 음성 전사 텍스트 칼럼으로 구성된 CSV(TSV)파일을 입력으로 사용하여 "
+                    "📂 이 프로그램은 음성 파일 경로와 음성 전사 텍스트 칼럼으로 구성된 CSV(TSV)파일을 입력으로 사용하여"
                     "발화에서 억양을 분석하고 자동으로 전사합니다.\n\n"
                     "👉 사용 방법:\n"
-                    "1️⃣ CSV(TSV) 파일을 선택하세요.\n"
-                    "2️⃣ 저장 경로와 옵션 값을 확인한 뒤 작업 시작 버튼을 누르세요."
+                    "1️⃣ CSV(TSV) 파일을 선택하세요.(칼럼 구성 예: wav_filename(*.wav), sex(M,F), text)\n"
+                    "2️⃣ 매개변수(parameter) 값을 설정하고 작업 시작 버튼을 누르세요.\n"
+                    "3️⃣ 작업을 중단하려면 중단 버튼을 누르세요. 재시작시 해당 음성의 모든 산출물이 존재한다면 건너뜁니다."
                 ),
                 lines=6,
                 interactive=False,
@@ -173,15 +174,9 @@ def create_gradio_interface():
                 label="Readme"
             )
 
-        # TSV 파일과 저장 경로
-        with gr.Row():
-            tsv_file = gr.File(label="📁 TSV 파일 선택", type="filepath")
-            output_dir = gr.Textbox(
-                label="📂 저장 경로",
-                value=default_config["output_dir"],
-                placeholder="기본값: out/outputs"
-            )
-
+        # TSV 파일 선택
+        tsv_file = gr.File(label="📁 CSV(TSV) 파일 선택", type="filepath")
+        
         # Pitch Parameters
         gr.Markdown("### 🎛️ Pitch Parameters")  # 섹션 제목 추가
 
@@ -242,7 +237,7 @@ def create_gradio_interface():
                 raise ValueError(f"숫자 값을 입력해야 합니다. {option} 기본값: {default}")
 
         # 작업 시작 함수
-        def start_transcription(tsv_file, output_dir, min_pitch, max_pitch, time_step,
+        def start_transcription(tsv_file, min_pitch, max_pitch, time_step,
                         silence_threshold, voicing_threshold, octave_cost, octave_jump_cost, voice_unvoiced_cost,
                         number_of_candidates, very_accurate,
                         show_spline, fixed_y_range,
@@ -254,7 +249,7 @@ def create_gradio_interface():
                 # 값 검증 및 변환
                 config = {
                     "tsv_file": tsv_file,
-                    "output_dir": output_dir if output_dir else default_config["output_dir"],
+                    "output_dir": default_config["output_dir"],
                     "min_pitch": validate_and_convert(min_pitch, default_config["min_pitch"], float, "Min Pitch"),
                     "max_pitch": validate_and_convert(max_pitch, default_config["max_pitch"], float, "Max Pitch"),
                     "time_step": validate_and_convert(time_step, default_config["time_step"], float, "Pitch Step"),
@@ -305,7 +300,7 @@ def create_gradio_interface():
         start_button.click(
             fn=start_transcription,
             inputs=[
-                tsv_file, output_dir, min_pitch, max_pitch, time_step,
+                tsv_file, min_pitch, max_pitch, time_step,
                 silence_threshold, voicing_threshold, octave_cost, octave_jump_cost, voice_unvoiced_cost,
                 number_of_candidates, very_accurate,
                 show_spline,
@@ -333,4 +328,4 @@ def create_gradio_interface():
 
 if __name__ == '__main__':
     main = create_gradio_interface()
-    main.launch()
+    main.launch(server_name="0.0.0.0", server_port=7861)

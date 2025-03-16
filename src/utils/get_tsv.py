@@ -36,7 +36,7 @@ all_wav_files.sort()
 # TSV 파일 작성
 with open(output_tsv, 'w', newline='', encoding='utf-8') as tsvfile:
     writer = csv.writer(tsvfile, delimiter='\t')
-    writer.writerow(['wav_filepath', 'sex', 'text'])  # 필요한 칼럼만 작성
+    writer.writerow(['wav_filename', 'sex', 'text'])  # 필요한 칼럼만 작성
 
     # WAV 파일 목록을 순회하며 처리
     for wav_path in all_wav_files:
