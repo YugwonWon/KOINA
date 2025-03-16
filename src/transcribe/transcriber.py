@@ -1075,7 +1075,7 @@ def process_files(tsv_file: str, output_dir: str, momel_path: str, stop_flag):
     
     # 상대 경로로 out 디렉토리에서 WAV 파일 검색
     wav_root_dir = "out"  # 상대 경로로 설정, 로컬에서 도커를 실행할 때 wav 파일이 여기에 마운트되어야 한다. 
-    wav_dict = collect_wav_files(output_dir)
+    wav_dict = collect_wav_files(wav_root_dir)
 
     try:
         delimiter = detect_delimiter(tsv_file)
@@ -1156,17 +1156,12 @@ if __name__ == '__main__':
         except Exception as e:
             print(f"Error creating symbolic link: {e}")
 
-    # 사용 예시
-    # target_path = "/data1/users/yugwon/SDRW3/"
-    # link_path = "out/outputs3"
-    # create_symbolic_link(target_path, link_path)
-    
     # 중지 플래그 생성
     stop_flag = Event()
 
     process_files(
         tsv_file=args.tsv_file,
-        output_dir="out/outputs4-tobi",
+        output_dir=args.output_dir,
         momel_path=args.momel_path,
         stop_flag=stop_flag  # 중지 플래그 전달
     )
