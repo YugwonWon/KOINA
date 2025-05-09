@@ -85,7 +85,7 @@ class MLP(nn.Module):
             nn.Linear(64, 32),
             nn.ReLU(),
             nn.Dropout(dropout_rate),  # 두 번째 은닉층 이후 dropout
-            nn.Linear(32, 2)  # 출력 클래스 2개 (하강/상승)
+            nn.Linear(32, 1)  # 출력 클래스 2개 (하강/상승)
         )
     
     def forward(self, x):
@@ -385,13 +385,18 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, device,
         for X_batch, y_batch in train_loader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
             optimizer.zero_grad()
-            output = model(X_batch)
-            loss = criterion(output, y_batch)
+            # output = model(X_batch) shape (batch, 2)
+            # loss = criterion(output, y_batch) integer class label
+            logits = model(X_batch).squeeze(1)  # shape (batch,)
+            loss = criterion(logits, y_batch.float())
             loss.backward()
             optimizer.step()
 
             total_loss += loss.item()
-            correct += (output.argmax(1) == y_batch).sum().item()
+            # correct += (output.argmax(1) == y_batch).sum().item()
+            probs   = torch.sigmoid(logits)
+            preds   = (probs >= 0.5).long()
+            correct += (preds == y_batch).sum().item()
 
         train_acc = correct / len(train_loader.dataset)
         train_losses.append(total_loss / len(train_loader))
@@ -405,19 +410,34 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, device,
         with torch.no_grad():
             for X_batch, y_batch in valid_loader:
                 X_batch, y_batch = X_batch.to(device), y_batch.to(device)
-                output = model(X_batch)
-                loss = criterion(output, y_batch)
+                
+                # 1) 로짓 추출 (shape: [batch,])
+                logits = model(X_batch).squeeze(-1)
+                
+                # 2) loss 계산 (float 타입 레이블)
+                loss = criterion(logits, y_batch.float())
                 valid_loss += loss.item()
-                valid_correct += (output.argmax(1) == y_batch).sum().item()
-        
+                
+                # 3) 확률 변환 & 예측
+                probs = torch.sigmoid(logits)
+                preds = (probs >= 0.5).long()
+                valid_correct += (preds == y_batch).sum().item()
+
+        # 4) 지표 집계
         valid_acc = valid_correct / len(valid_loader.dataset)
         valid_losses.append(valid_loss / len(valid_loader))
         valid_accuracies.append(valid_acc)
+
+        # 5) TensorBoard 기록
         writer.add_scalar("Loss/valid", valid_loss / len(valid_loader), epoch)
         writer.add_scalar("Accuracy/valid", valid_acc, epoch)
-        
-        logger.info(f"Epoch [{epoch+1}/{num_epochs}] Train Loss: {total_loss:.4f}, Valid Loss: {valid_loss:.4f}, Train Acc: {train_acc:.4f}, Valid Acc: {valid_acc:.4f}")
 
+        # 6) 로그 출력 및 체크포인트 저장
+        logger.info(
+            f"Epoch [{epoch+1}/{num_epochs}] "
+            f"Train Loss: {total_loss:.4f}, Valid Loss: {valid_loss:.4f}, "
+            f"Train Acc: {train_acc:.4f}, Valid Acc: {valid_acc:.4f}"
+        )
         if valid_loss < best_valid_loss:
             best_valid_loss = valid_loss
             torch.save(model.state_dict(), checkpoint_path)
@@ -434,8 +454,11 @@ def evaluate_model(model, test_loader, device, dataset):
     with torch.no_grad():
         for X_batch, y_batch in test_loader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
-            output = model(X_batch)
-            predictions = output.argmax(1).cpu().numpy()
+            # output = model(X_batch)
+            # predictions = output.argmax(1).cpu().numpy()
+            logits = model(X_batch).squeeze(1) # (batch,)
+            probs  = torch.sigmoid(logits)
+            predictions = (probs >= 0.5).long().cpu().numpy()
             y_pred.extend(predictions)
             y_true.extend(y_batch.cpu().numpy())
 
@@ -453,7 +476,7 @@ if __name__ == "__main__":
 
     device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
     model = MLP(input_dim=7).to(device)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
     train_model(model, train_loader, valid_loader, criterion, optimizer, device, num_epochs=150)
@@ -470,16 +493,15 @@ if __name__ == "__main__":
     # model = MLP(input_dim=7).to(device)
 
     # 체크포인트 불러오기
-    checkpoint_path = "out/models/best_checkpoint2.pth"  # 저장된 모델 가중치 경로
+    checkpoint_path = "out/models/best_checkpoint.pth"  # 저장된 모델 가중치 경로
     if os.path.exists(checkpoint_path):
         model.load_state_dict(torch.load(checkpoint_path, map_location=device))
         model.eval()  # 평가 모드로 설정
         logger.info(f"Model checkpoint loaded from '{checkpoint_path}'")
     else:
-        raise FileNotFoundError(f"❌ Error: No checkpoint found at '{checkpoint_path}'")
+        raise FileNotFoundError(f"Error: No checkpoint found at '{checkpoint_path}'")
 
     # 시각화 함수 실행 (학습 없이 바로 분석 진행)
     plot_feature_importance(model, dataset)
     plot_shap_analysis_combined(model, valid_loader, test_loader, dataset)
 
-    

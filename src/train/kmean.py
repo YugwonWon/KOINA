@@ -79,7 +79,7 @@ def extract_textgrid_data(filepath):
             if gender == "F":
                 points_pct_data_F.append(points_sorted)
                 tcog_data_F.append(tcog_time)
-                base_names_F.append(base_name)  # ✅ 파일명 저장 추가
+                base_names_F.append(base_name)  # 파일명 저장 추가
             else:
                 points_pct_data_M.append(points_sorted)
                 tcog_data_M.append(tcog_time)
@@ -108,36 +108,36 @@ def load_data_from_pkl(filepath):
 
 def load_or_process_textgrid_data():
     global points_pct_data_F, tcog_data_F, base_names_F
-    global points_pct_data_M, tcog_data_M, base_names_M  # ✅ 전역 변수 선언 추가
+    global points_pct_data_M, tcog_data_M, base_names_M  # 전역 변수 선언 추가
 
     ppf_path = os.path.join(PKL_DIR, "points_pct_data_F.pkl")
     tcf_path = os.path.join(PKL_DIR, "tcog_data_F.pkl")
-    bnf_path = os.path.join(PKL_DIR, "base_names_F.pkl")  # ✅ 파일명 저장
+    bnf_path = os.path.join(PKL_DIR, "base_names_F.pkl")  # 파일명 저장
 
     ppm_path = os.path.join(PKL_DIR, "points_pct_data_M.pkl")
     tcm_path = os.path.join(PKL_DIR, "tcog_data_M.pkl")
-    bnm_path = os.path.join(PKL_DIR, "base_names_M.pkl")  # ✅ 파일명 저장
+    bnm_path = os.path.join(PKL_DIR, "base_names_M.pkl")  # 파일명 저장
 
     if all(os.path.exists(path) for path in [ppf_path, tcf_path, bnf_path, ppm_path, tcm_path, bnm_path]):
         print("Loading data from .pkl files...")
         points_pct_data_F = pickle.load(open(ppf_path, "rb"))
         tcog_data_F = pickle.load(open(tcf_path, "rb"))
-        base_names_F = pickle.load(open(bnf_path, "rb"))  # ✅ 파일명도 로드
+        base_names_F = pickle.load(open(bnf_path, "rb"))  # 파일명도 로드
 
         points_pct_data_M = pickle.load(open(ppm_path, "rb"))
         tcog_data_M = pickle.load(open(tcm_path, "rb"))
-        base_names_M = pickle.load(open(bnm_path, "rb"))  # ✅ 파일명도 로드
+        base_names_M = pickle.load(open(bnm_path, "rb"))  # 파일명도 로드
     else:
         print("Processing TextGrid files...")
         process_textgrid_files(DATA_DIR)
         os.makedirs(PKL_DIR, exist_ok=True)
         pickle.dump(points_pct_data_F, open(ppf_path, "wb"))
         pickle.dump(tcog_data_F, open(tcf_path, "wb"))
-        pickle.dump(base_names_F, open(bnf_path, "wb"))  # ✅ 파일명 저장 추가
+        pickle.dump(base_names_F, open(bnf_path, "wb"))  # 파일명 저장 추가
 
         pickle.dump(points_pct_data_M, open(ppm_path, "wb"))
         pickle.dump(tcog_data_M, open(tcm_path, "wb"))
-        pickle.dump(base_names_M, open(bnm_path, "wb"))  # ✅ 파일명 저장 추가
+        pickle.dump(base_names_M, open(bnm_path, "wb"))  # 파일명 저장 추가
 
     return points_pct_data_F, tcog_data_F, base_names_F, points_pct_data_M, tcog_data_M, base_names_M
 
