@@ -5,9 +5,20 @@ import pickle
 import argparse
 
 from sklearn.cluster import KMeans
+from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
+from scipy.stats import ttest_ind, f_oneway
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+from plotnine import (
+    ggplot, aes, geom_point, labs, scale_color_brewer,
+    theme_minimal, theme, guides, guide_legend,
+    element_text, element_blank, element_line,      # ← element_line 임포트
+    facet_wrap
+)
+from scipy.stats import friedmanchisquare, wilcoxon
+from statsmodels.stats.multitest import multipletests
 
 import matplotlib.pyplot as plt
 from textgrid import TextGrid
@@ -15,8 +26,8 @@ from tqdm import tqdm
 
 # 전역 경로 설정
 DATA_DIR = "/data1/users/yugwon/SDRW2"
-OUTPUT_DIR = "out/fig/"
-PKL_DIR = "data/pkl/1000-mf-90-100-backup"
+OUTPUT_DIR = "out/fig4/"
+PKL_DIR = "data/pkl/1000-mf-90-100"
 
 # 남녀별 TCoG와 Points(pct) 데이터를 저장할 리스트
 points_pct_data_F = []
@@ -315,7 +326,7 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
     optimal_clusters = plot_elbow_silhouette(features_array, title_suffix)
     print(f"[{title_suffix}] -> Best K from silhouette: {optimal_clusters}")
 
-    cluster_candidates = [2, 3, 4]
+    cluster_candidates = [2, 3, 4, 5]
     if optimal_clusters not in cluster_candidates:
         cluster_candidates.append(optimal_clusters)
     cluster_candidates = sorted(set(cluster_candidates))
@@ -385,7 +396,13 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
             plt.close()
 
             print(f"[{title_suffix}] (k=2) centroid difference chart: {output_path}")
-
+            test_feature_level_diffs_k2(features_array, labels,
+                                feature_names,
+                                f"KMeans-{title_suffix}-k2")
+            # test_feature_differences(
+            #     features_array, labels, feature_names,
+            #     f"KMeans-{title_suffix}-k{n_clusters}"
+            # )
         elif n_clusters > 2:
             centroids = kmeans.cluster_centers_
             Kc = n_clusters
@@ -432,8 +449,9 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
                 cluster_indices = (labels == cluster_id)
                 plt.scatter(X_pca[cluster_indices, 0], X_pca[cluster_indices, 1],
                             alpha=0.6, label=f"Cluster {cluster_id}")
+                
 
-            plt.title(f"PCA (2D) Visualization - K={n_clusters}, {title_suffix}")
+            plt.title(f"PCA 2D K-Means - K={n_clusters} [{title_suffix}]")
             plt.xlabel(f"PC1 (var: {pca.explained_variance_ratio_[0]*100:.1f}%)")
             plt.ylabel(f"PC2 (var: {pca.explained_variance_ratio_[1]*100:.1f}%)")
             plt.legend()
@@ -443,10 +461,322 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
             plt.close()
 
             print(f"[{title_suffix}] (k={n_clusters}) PCA scatter plot: {pcafile}")
+
+        if args.use_tsne:
+            plot_tsne_plotnine(
+                features_array, labels,
+                f"K-Means k={n_clusters} [{title_suffix}]",
+                OUTPUT_DIR,
+                gender=title_suffix,
+                model_tag=f"K-Means_k{n_clusters}"
+            )
             
+# -----------------------------------------------
+# GM · BGM 클러스터링 & 시각화 + 통계검정
+# -----------------------------------------------
+def run_mixture_and_visualize(features_array, valid_indices, points_pct_data,
+                              title_suffix,              # "Female" / "Male"
+                              model_tag,    # GaussianMixture / BGMM
+                              cluster_candidates=(2,3,4,5),
+                              use_pca=False):
+    """
+    K-Means 버전을 그대로 복사해 model_class(means_) 만 바꾼 함수.
+    model_tag: "GM" / "BGM" 같이 파일명‧타이틀에 붙일 짧은 문자열
+    """
+    if len(features_array) == 0:
+        print(f"[{title_suffix}-{model_tag}] No valid items found. Check your data!")
+        return
+
+    for n_clusters in cluster_candidates:
+        # -------- ① 클러스터링 -----------------------
+        # if model_tag == "GM":
+        #     model = GaussianMixture(
+        #         n_components     = n_clusters,
+        #         covariance_type  = "diag",    # 또는 "tied"
+        #         n_init           = 10,
+        #         max_iter         = 1000,
+        #         reg_covar        = 1e-6,
+        #         init_params      = "kmeans",
+        #         random_state     = 42
+        #     )
+        # else:  # "BGM"
+        #     model = BayesianGaussianMixture(
+        #         n_components                    = n_clusters,
+        #         weight_concentration_prior_type = "dirichlet_process",
+        #         weight_concentration_prior      = 0.1,
+        #         covariance_type                 = "diag",
+        #         n_init                          = 10,
+        #         max_iter                        = 1000,
+        #         reg_covar                       = 1e-6,
+        #         init_params                     = "k-means++",
+        #         random_state                    = 42
+        #     )
+        # 디폴트 값 사용
+        if model_tag == "GM":              
+            model = GaussianMixture(
+                n_components = n_clusters,
+                n_init = 10,
+                covariance_type = "diag",
+                random_state = 42           
+            )
+        else:                               
+            model = BayesianGaussianMixture(
+                n_components = n_clusters,
+                n_init = 10,
+                covariance_type = "diag",
+                random_state = 42
+            )
+        model.fit(features_array)
+        labels = model.predict(features_array)
+        centroids = model.means_                        # ← KMeans의 cluster_centers_ 대응
+
+        # -------- ② F0 윤곽 꺾은선 그림 ----------------
+        plt.figure(figsize=(10, 6))
+        colors = plt.cm.get_cmap("tab10", n_clusters)
+        for cluster_id in range(n_clusters):
+            cluster_item_indices = np.where(labels == cluster_id)[0]
+            cluster_tcog_vals   = features_array[cluster_item_indices, 6]
+            mean_tcog = np.mean(cluster_tcog_vals) if len(cluster_tcog_vals) else np.nan
+
+            actual_item_indices = [valid_indices[idx] for idx in cluster_item_indices]
+            for item_idx in actual_item_indices:
+                item_points = points_pct_data[item_idx]
+                if len(item_points) < 2:  # 방어
+                    continue
+                times, f0s = zip(*item_points)
+                plt.plot(times, f0s, color=colors(cluster_id), alpha=0.4)
+
+            plt.plot([], [], color=colors(cluster_id),
+                     label=f"Cluster {cluster_id} (Mean TCoG={mean_tcog:.2f})")
+
+        plt.title(f"{model_tag} K={n_clusters} [{title_suffix}]")
+        plt.xlabel("Time (%)"); plt.xlim(90, 100)
+        plt.ylabel("F0 (Hz)")
+        plt.legend(); plt.grid(True)
+        savepath = os.path.join(OUTPUT_DIR,
+                                f"{model_tag.lower()}_{title_suffix}_k{n_clusters}.png")
+        plt.savefig(savepath); plt.close()
+        print(f"[{title_suffix}-{model_tag}] k={n_clusters} plot saved → {savepath}")
+
+        # -------- ③ 특성 중요도(centroid diff) ----------
+        if n_clusters == 2:
+            diff = np.abs(centroids[0] - centroids[1])
+            test_feature_level_diffs_k2(features_array, labels,
+                                feature_names,
+                                f"KMeans-{title_suffix}-k2")
+        else:
+            # 모든 센트로이드 쌍의 평균 절대차
+            diffs_accum = np.zeros(features_array.shape[1]); pair_cnt = 0
+            for i in range(n_clusters):
+                for j in range(i+1, n_clusters):
+                    diffs_accum += np.abs(centroids[i] - centroids[j])
+                    pair_cnt   += 1
+            diff = diffs_accum / pair_cnt
+
+        sorted_idx   = diff.argsort()[::-1]
+        sorted_diff  = diff[sorted_idx]
+        sorted_names = [feature_names[i] for i in sorted_idx]
+
+        plt.figure(figsize=(8, 6))
+        bars = plt.bar(range(len(sorted_diff)), sorted_diff, tick_label=sorted_names)
+        for b in bars:
+            h = b.get_height()
+            plt.text(b.get_x() + b.get_width()/2, h, f"{h:.2f}",
+                     ha="center", va="bottom", fontsize=9)
+        title_bar = "Centroid Diff" if n_clusters == 2 else "Avg Pairwise Centroid Diff"
+        plt.title(f"{title_bar} ({model_tag} K={n_clusters}) - {title_suffix}")
+        plt.ylim(0, 2.5); plt.yticks(np.arange(0, 2.6, 0.5)); plt.ylabel("Abs diff")
+        plt.tight_layout()
+        fname_bar = f"{model_tag.lower()}_centroid_k{n_clusters}_{title_suffix}.png"
+        plt.savefig(os.path.join(OUTPUT_DIR, fname_bar)); plt.close()
+
+        # # -------- ④ 통계 검정 --------------------------
+        # test_feature_differences(features_array, labels, feature_names,
+        #                          f"{model_tag}-{title_suffix}-k{n_clusters}")
+
+        # -------- ⑤ PCA 산점도(선택) --------------------
+        if use_pca:
+            pca   = PCA(n_components=2)
+            X_pca = pca.fit_transform(features_array)
+            plt.figure(figsize=(8,6))
+            for cid in range(n_clusters):
+                mask = labels == cid
+                plt.scatter(X_pca[mask,0], X_pca[mask,1],
+                            alpha=0.6, label=f"Cl {cid}")
+            plt.title(f"PCA 2D – {model_tag} k={n_clusters} [{title_suffix}]")
+            plt.xlabel(f"PC1 (var:{pca.explained_variance_ratio_[0]*100:.1f}%)")
+            plt.ylabel(f"PC2 (var:{pca.explained_variance_ratio_[1]*100:.1f}%)")
+            plt.legend(); plt.grid(True)
+            pcapath = os.path.join(OUTPUT_DIR,
+                                   f"{model_tag.lower()}_pca_k{n_clusters}_{title_suffix}.png")
+            plt.savefig(pcapath); plt.close()
+            print(f"[{title_suffix}-{model_tag}] k={n_clusters} PCA saved → {pcapath}")
+            
+        if args.use_tsne:
+            plot_tsne_plotnine(
+                features_array, labels,
+                f"{model_tag} k={n_clusters} [{title_suffix}]",
+                OUTPUT_DIR,
+                gender=title_suffix,
+                model_tag=f"{model_tag}_k{n_clusters}"
+            )
+
+def plot_tsne_plotnine(features, labels,
+                       title, save_dir,
+                       gender=None, model_tag=None,
+                       perplexity=30, n_iter=1000,
+                       point_alpha=0.65, point_size=1.6):
+    # ── t-SNE 변환 ─────────────────────────────
+    tsne = TSNE(n_components=2, perplexity=perplexity,
+                n_iter=n_iter, init="pca", random_state=42)
+    X_tsne = tsne.fit_transform(features)
+
+    df = pd.DataFrame({
+        "tsne1":   X_tsne[:, 0],
+        "tsne2":   X_tsne[:, 1],
+        "cluster": labels.astype(str)
+    })
+    if gender:    df["gender"] = gender
+    if model_tag: df["model"]  = model_tag
+
+    # ── 기본 플롯 ───────────────────────────────
+    p = (
+    ggplot(df, aes("tsne1", "tsne2", color="cluster"))
+    + geom_point(alpha=0.5, size=1.3, stroke=0)           # ← 덜 떡지게
+    + scale_color_brewer(type="qual", palette="Set2")
+    + labs(title=title, x="t-SNE-1", y="t-SNE-2")
+    + theme_minimal(base_size=11)
+    + theme(
+        panel_grid_major = element_line(color="#d9d9d9", size=0.25),
+        panel_grid_minor = element_blank(),
+        plot_title       = element_text(size=14, weight='bold', ha='center'),
+        axis_title       = element_text(size=11, weight='bold'),
+        # -------- 범례 --------
+        legend_position      = "right",       # ← 캔버스 밖 오른쪽
+        legend_background    = element_blank(),
+        legend_key           = element_blank(),
+        legend_title         = element_text(size=9, weight='bold')
+    )
+    + guides(
+        color = guide_legend(
+            title="Cluster",
+            override_aes={"size":3, "alpha":1, "stroke":0}
+            )
+        )
+    )
+
+    # ── facet이 필요할 때만 추가 ────────────────
+    facet_formula = None
+    if "model" in df.columns and df["model"].nunique() > 1 and \
+       "gender" in df.columns and df["gender"].nunique() > 1:
+        facet_formula = "~ gender + model"
+    elif "model" in df.columns and df["model"].nunique() > 1:
+        facet_formula = "~ model"
+    elif "gender" in df.columns and df["gender"].nunique() > 1:
+        facet_formula = "~ gender"
+
+    if facet_formula:
+        p += facet_wrap(facet_formula)
+    else:
+        # 단일 facet일 때 strip 제거(제목 중복 방지)
+        p += theme(strip_background=element_blank(),
+                   strip_text=element_blank())
+
+    # ── 저장 ─────────────────────────────────
+    fname = os.path.join(save_dir,
+                         f"tsne_{title.replace(' ', '_')}.png")
+    p.save(
+    fname,
+    dpi=300,
+    width=7, height=4,             # 폭을 1인치 정도만 넓혀 둠
+    units="in",
+    bbox_inches='tight'            # ← 범례·제목 잘림 방지
+    )
+    print(f"[t-SNE] {title} → {fname}")
+
+def plot_tsne_scatter(features, labels, title, save_dir):
+    """
+    features : (N, D) numpy array  –  스케일링 완료본 사용 권장
+    labels   : (N,)   cluster 레이블
+    title    : 그래프 제목 (모델·K 포함)
+    save_dir : 출력 폴더
+    """
+    # perplexity는 샘플 수 5~50% 사이에서 실험 (기본 30)
+    tsne = TSNE(n_components=2, perplexity=30,
+                n_iter=1000, random_state=42, init="pca")  # init="pca" → 수렴 안정
+    X_tsne = tsne.fit_transform(features)
+
+    n_clusters = len(np.unique(labels))
+    colors = plt.cm.get_cmap("tab10", n_clusters)
+
+    plt.figure(figsize=(8, 6))
+    for cid in range(n_clusters):
+        mask = labels == cid
+        plt.scatter(X_tsne[mask, 0], X_tsne[mask, 1],
+                    alpha=0.6, label=f"Cl {cid}",
+                    color=colors(cid))
+    plt.title(f"t-SNE 2D – {title}")
+    plt.xlabel("t-SNE-1"); plt.ylabel("t-SNE-2")
+    plt.legend(); plt.grid(True)
+    fname = os.path.join(save_dir,
+                         f"tsne_{title.replace(' ', '_')}.png")
+    plt.tight_layout(); plt.savefig(fname); plt.close()
+    print(f"[t-SNE] {title} plot saved → {fname}")
+    
+def bootstrap_centroid_diffs(features, labels, B=1000, random_state=42):
+    """k=2 전용: 부트스트랩으로 절대 평균 차이 분포(B, 7) 반환"""
+    rng  = np.random.default_rng(random_state)
+    idx0 = np.where(labels == 0)[0]
+    idx1 = np.where(labels == 1)[0]
+    n0, n1 = len(idx0), len(idx1)
+
+    boot = np.zeros((B, features.shape[1]))
+    for b in range(B):
+        s0 = rng.choice(idx0, n0, replace=True)
+        s1 = rng.choice(idx1, n1, replace=True)
+        m0 = features[s0].mean(axis=0)
+        m1 = features[s1].mean(axis=0)
+        boot[b] = np.abs(m0 - m1)
+    return boot  # (B, 7)
+
+def test_feature_level_diffs_k2(features, labels, feature_names, title):
+    """
+    k=2 특성 간 절대차 비교:
+      ① Friedman 전체 검정
+      ② Wilcoxon-Holm 사후 비교
+      ③ 콘솔 출력 + CSV 저장
+    """
+    boots = bootstrap_centroid_diffs(features, labels, B=1000)
+    
+    # ----- ① 전체 검정 -----
+    stat, p_all = friedmanchisquare(*[boots[:, i] for i in range(boots.shape[1])])
+    print(f"\n=== {title}: Friedman χ²={stat:.2f}, p={p_all:.3e}")
+    
+    # ----- ② 사후 pairwise -----
+    pair_rows, pvals = [], []
+    for i in range(len(feature_names)):
+        for j in range(i+1, len(feature_names)):
+            T, p = wilcoxon(boots[:, i], boots[:, j])
+            pvals.append(p)
+            pair_rows.append({"Feature1": feature_names[i],
+                              "Feature2": feature_names[j],
+                              "Statistic": T,
+                              "p-raw": p})
+    # Holm 보정
+    _, p_adj, _, _ = multipletests(pvals, method="holm")
+    for row, padj in zip(pair_rows, p_adj):
+        row["p-adj"] = padj
+        row["Significant"] = "★" if padj < 0.05 else ""
+        print(f"  {row['Feature1']:>8} vs {row['Feature2']:<8}: "
+              f"p_adj={padj:.3e} {row['Significant']}")
+
+    # ----- ③ CSV 저장 -----
+    csv_df = pd.DataFrame(pair_rows)
+    csv_path = os.path.join(OUTPUT_DIR,
+                            f"pairwise_feature_diff_{title}.csv")
+    csv_df.to_csv(csv_path, index=False)
+    print(f"Saved pairwise feature-diff CSV → {csv_path}")
         
-
-
 # -----------------------------
 # (D) main
 # -----------------------------
@@ -456,6 +786,8 @@ if __name__ == '__main__':
                         help="Apply Z-score standardization for features.", default=True)
     parser.add_argument("--use_pca", action="store_true", 
                         help="Visualize PCA 2D scatter with cluster labels.", default=True)
+    parser.add_argument("--use_tsne", action="store_true",
+                        help="Visualize t-SNE 2D scatter with cluster labels.", default=True)
     args = parser.parse_args()
 
     # 출력 폴더 생성
@@ -480,6 +812,14 @@ if __name__ == '__main__':
     run_kmeans_and_visualize(features_F, valid_indices_F, points_pct_data_F, 
                              "Female", use_pca=args.use_pca)
 
+    run_mixture_and_visualize(features_F, valid_indices_F, points_pct_data_F,
+                          "Female", "GM",
+                          use_pca=args.use_pca)
+    
+    run_mixture_and_visualize(features_F, valid_indices_F, points_pct_data_F,
+                          "Female", "BGM",
+                          use_pca=args.use_pca)
+    
     # 3) 남성(M) 처리
     features_M, valid_indices_M, valid_names_M = compute_features(points_pct_data_M, tcog_data_M, base_names_M)
     # 통계량 CSV 저장 (스케일링 전)
@@ -494,6 +834,14 @@ if __name__ == '__main__':
 
     run_kmeans_and_visualize(features_M, valid_indices_M, points_pct_data_M, 
                              "Male", use_pca=args.use_pca)
+    
+    run_mixture_and_visualize(features_M, valid_indices_M, points_pct_data_M,
+                          "Male", "GM",
+                          use_pca=args.use_pca)
+
+    run_mixture_and_visualize(features_M, valid_indices_M, points_pct_data_M,
+                          "Male", "BGM",
+                          use_pca=args.use_pca)
     
     kmeans_F = KMeans(n_clusters=2, random_state=42).fit(features_F)
     kmeans_M = KMeans(n_clusters=2, random_state=42).fit(features_M)
