@@ -310,7 +310,7 @@ def save_clustered_features_to_csv(features_array, labels, base_names, gender_la
         return
     
     df = pd.DataFrame(features_array, columns=feature_names)
-    df["filename"] = base_names  # ✅ 파일명 추가
+    df["filename"] = base_names  # 파일명 추가
     df["cluster_label"] = labels
 
     csv_path = os.path.join(OUTPUT_DIR, f"clustered_features_{gender_label}_k{n_clusters}.csv")
@@ -396,13 +396,7 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
             plt.close()
 
             print(f"[{title_suffix}] (k=2) centroid difference chart: {output_path}")
-            test_feature_level_diffs_k2(features_array, labels,
-                                feature_names,
-                                f"KMeans-{title_suffix}-k2")
-            # test_feature_differences(
-            #     features_array, labels, feature_names,
-            #     f"KMeans-{title_suffix}-k{n_clusters}"
-            # )
+
         elif n_clusters > 2:
             centroids = kmeans.cluster_centers_
             Kc = n_clusters
@@ -488,42 +482,17 @@ def run_mixture_and_visualize(features_array, valid_indices, points_pct_data,
         return
 
     for n_clusters in cluster_candidates:
-        # -------- ① 클러스터링 -----------------------
-        # if model_tag == "GM":
-        #     model = GaussianMixture(
-        #         n_components     = n_clusters,
-        #         covariance_type  = "diag",    # 또는 "tied"
-        #         n_init           = 10,
-        #         max_iter         = 1000,
-        #         reg_covar        = 1e-6,
-        #         init_params      = "kmeans",
-        #         random_state     = 42
-        #     )
-        # else:  # "BGM"
-        #     model = BayesianGaussianMixture(
-        #         n_components                    = n_clusters,
-        #         weight_concentration_prior_type = "dirichlet_process",
-        #         weight_concentration_prior      = 0.1,
-        #         covariance_type                 = "diag",
-        #         n_init                          = 10,
-        #         max_iter                        = 1000,
-        #         reg_covar                       = 1e-6,
-        #         init_params                     = "k-means++",
-        #         random_state                    = 42
-        #     )
         # 디폴트 값 사용
         if model_tag == "GM":              
             model = GaussianMixture(
                 n_components = n_clusters,
                 n_init = 10,
-                covariance_type = "diag",
                 random_state = 42           
             )
         else:                               
             model = BayesianGaussianMixture(
                 n_components = n_clusters,
                 n_init = 10,
-                covariance_type = "diag",
                 random_state = 42
             )
         model.fit(features_array)
@@ -561,9 +530,6 @@ def run_mixture_and_visualize(features_array, valid_indices, points_pct_data,
         # -------- ③ 특성 중요도(centroid diff) ----------
         if n_clusters == 2:
             diff = np.abs(centroids[0] - centroids[1])
-            test_feature_level_diffs_k2(features_array, labels,
-                                feature_names,
-                                f"KMeans-{title_suffix}-k2")
         else:
             # 모든 센트로이드 쌍의 평균 절대차
             diffs_accum = np.zeros(features_array.shape[1]); pair_cnt = 0
@@ -722,61 +688,7 @@ def plot_tsne_scatter(features, labels, title, save_dir):
                          f"tsne_{title.replace(' ', '_')}.png")
     plt.tight_layout(); plt.savefig(fname); plt.close()
     print(f"[t-SNE] {title} plot saved → {fname}")
-    
-def bootstrap_centroid_diffs(features, labels, B=1000, random_state=42):
-    """k=2 전용: 부트스트랩으로 절대 평균 차이 분포(B, 7) 반환"""
-    rng  = np.random.default_rng(random_state)
-    idx0 = np.where(labels == 0)[0]
-    idx1 = np.where(labels == 1)[0]
-    n0, n1 = len(idx0), len(idx1)
 
-    boot = np.zeros((B, features.shape[1]))
-    for b in range(B):
-        s0 = rng.choice(idx0, n0, replace=True)
-        s1 = rng.choice(idx1, n1, replace=True)
-        m0 = features[s0].mean(axis=0)
-        m1 = features[s1].mean(axis=0)
-        boot[b] = np.abs(m0 - m1)
-    return boot  # (B, 7)
-
-def test_feature_level_diffs_k2(features, labels, feature_names, title):
-    """
-    k=2 특성 간 절대차 비교:
-      ① Friedman 전체 검정
-      ② Wilcoxon-Holm 사후 비교
-      ③ 콘솔 출력 + CSV 저장
-    """
-    boots = bootstrap_centroid_diffs(features, labels, B=1000)
-    
-    # ----- ① 전체 검정 -----
-    stat, p_all = friedmanchisquare(*[boots[:, i] for i in range(boots.shape[1])])
-    print(f"\n=== {title}: Friedman χ²={stat:.2f}, p={p_all:.3e}")
-    
-    # ----- ② 사후 pairwise -----
-    pair_rows, pvals = [], []
-    for i in range(len(feature_names)):
-        for j in range(i+1, len(feature_names)):
-            T, p = wilcoxon(boots[:, i], boots[:, j])
-            pvals.append(p)
-            pair_rows.append({"Feature1": feature_names[i],
-                              "Feature2": feature_names[j],
-                              "Statistic": T,
-                              "p-raw": p})
-    # Holm 보정
-    _, p_adj, _, _ = multipletests(pvals, method="holm")
-    for row, padj in zip(pair_rows, p_adj):
-        row["p-adj"] = padj
-        row["Significant"] = "★" if padj < 0.05 else ""
-        print(f"  {row['Feature1']:>8} vs {row['Feature2']:<8}: "
-              f"p_adj={padj:.3e} {row['Significant']}")
-
-    # ----- ③ CSV 저장 -----
-    csv_df = pd.DataFrame(pair_rows)
-    csv_path = os.path.join(OUTPUT_DIR,
-                            f"pairwise_feature_diff_{title}.csv")
-    csv_df.to_csv(csv_path, index=False)
-    print(f"Saved pairwise feature-diff CSV → {csv_path}")
-        
 # -----------------------------
 # (D) main
 # -----------------------------
