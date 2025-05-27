@@ -137,17 +137,14 @@ def load_data_mixed(pseudo_csv, human_csv, batch_size=32):
     train_p_idx, _ = rus.fit_resample(idx_p.reshape(-1,1), strat_p)
     train_p_idx = train_p_idx.flatten()
 
-    # ───── 3) 스케일링 ─────
     X_p = pseudo_df[feature_names].values.astype(np.float32)
     X_h = human_df[feature_names].values.astype(np.float32)
-
-    scaler = StandardScaler().fit(
-        np.vstack([X_p[train_p_idx], X_h[train_h_idx]])
-    )
-
-    def make_tensor(idx_list, X_arr, y_arr):
-        X = torch.tensor(scaler.transform(X_arr[idx_list]))
-        y = torch.tensor(y_arr[idx_list])
+    print(f"mean:{np.mean(X_p)}, std:{np.std(X_p)}")
+    
+    
+    def make_tensor(idx, X, y):
+        X = torch.tensor(X[idx])
+        y = torch.tensor(y[idx])
         return TensorDataset(X, y)
 
     train_ds = ConcatDataset([
@@ -173,8 +170,8 @@ def load_data_mixed(pseudo_csv, human_csv, batch_size=32):
         combined = [f"{y}_{g}" for y,g in zip(labels, genders)]
         cnt = Counter(combined)
         total = len(idx_list)
-        print(f"▶ {name} set: {total} samples — 분포:", end=" ")
-        print(", ".join(f"{k}:{v}" for k,v in cnt.items()))
+        logger.info(f"▶ {name} set: {total} samples — 분포:", end=" ")
+        logger.info(", ".join(f"{k}:{v}" for k,v in cnt.items()))
 
     print_dist("Train(pseudo)", train_p_idx, y_p, pseudo_df["filename"].values)
     print_dist("Train(human)", train_h_idx, y_h,    human_df["filename"].values)
