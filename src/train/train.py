@@ -170,8 +170,10 @@ def load_data_mixed(pseudo_csv, human_csv, batch_size=32):
         combined = [f"{y}_{g}" for y,g in zip(labels, genders)]
         cnt = Counter(combined)
         total = len(idx_list)
-        logger.info(f"▶ {name} set: {total} samples — 분포:", end=" ")
-        logger.info(", ".join(f"{k}:{v}" for k,v in cnt.items()))
+        logger.info(
+            f"▶ {name} set: {total} samples — 분포: "
+            f"{', '.join(f'{k}:{v}' for k, v in cnt.items())}"
+        )
 
     print_dist("Train(pseudo)", train_p_idx, y_p, pseudo_df["filename"].values)
     print_dist("Train(human)", train_h_idx, y_h,    human_df["filename"].values)
