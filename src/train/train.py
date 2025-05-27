@@ -2,23 +2,32 @@ import os
 import pickle
 import numpy as np
 import pandas as pd
+import random
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from collections import Counter
+
 import shap
+
 from torch.utils.data import ConcatDataset, TensorDataset
 from torch.utils.data import DataLoader, Dataset, Subset
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.metrics import classification_report
-import random
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
+
 import logging
 import matplotlib.pyplot as plt
-import seaborn as sns
+
 from imblearn.under_sampling import RandomUnderSampler
+
+import itertools
+import seaborn as sns
+import matplotlib.colors as mcolors
+from scipy import stats
+from statsmodels.stats.multitest import multipletests
 
 # 출력 디렉토리 설정
 OUTPUT_DIR = "out/models"
@@ -245,6 +254,34 @@ def plot_feature_importance(model):
     plt.tight_layout()
     plt.savefig(os.path.join("out/models", "feature_importance_radar_normalized.png"))
     logger.info("📊 Feature importance radar chart saved as 'out/models/feature_importance_radar_normalized.png'")
+    
+    # ─────────── 통계 검정 추가 ───────────
+    # 1) neuron × feature 행렬에서 절대값 분포 추출
+    W = model.layers[0].weight.detach().cpu().numpy()      # shape (n_neurons, 7)
+    absW = np.abs(W)                                       # (n_neurons, 7)
+    order = ["end_f0","max_f0","mean_f0","min_f0",
+             "start_f0","slope","TCoG"]
+    idx   = [feature_names.index(f) for f in order]
+    data  = absW[:, idx]                                   # (n_neurons,7)
+
+    # 2) Friedman 검정¹: 7개 그룹 간 분포 차이 확인
+    stat, p = stats.friedmanchisquare(*[data[:,i] for i in range(data.shape[1])])
+    print(f"▶ Friedman χ² = {stat:.3f}, p = {p:.3e}")
+
+    # 3) 사후검정: Wilcoxon 부호검정 + Holm–Bonferroni 보정²
+    pairs   = list(itertools.combinations(range(len(order)), 2))
+    pvals   = []
+    pairs_nm= []
+    for i,j in pairs:
+        _, p_ij = stats.wilcoxon(data[:,i], data[:,j])
+        pvals.append(p_ij)
+        pairs_nm.append(f"{order[i]} vs {order[j]}")
+    rej, p_corr, _, _ = multipletests(pvals, alpha=0.05, method="holm")
+
+    # 결과 출력
+    for name, p0, p1, r in zip(pairs_nm, pvals, p_corr, rej):
+        sig = "유의" if r else "ns"
+        print(f"  - {name}: unadj p={p0:.3e}, adj p={p1:.3e} → {sig}")
     
 # 학습 과정 시각화 함수
 def plot_training_curves(train_losses, valid_losses, train_accuracies, valid_accuracies):
@@ -534,11 +571,11 @@ if __name__ == "__main__":
     #     batch_size=32
     # )
 
-    # # 디바이스 설정
-    # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    # 디바이스 설정
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    # # 모델 생성 (체크포인트 불러오기 위해 초기화 필요)
-    # model = MLP(input_dim=7).to(device)
+    # 모델 생성 (체크포인트 불러오기 위해 초기화 필요)
+    model = MLP(input_dim=7).to(device)
 
     # 체크포인트 불러오기
     checkpoint_path = "out/models/best_checkpoint.pth"  # 저장된 모델 가중치 경로
@@ -561,3 +598,4 @@ if __name__ == "__main__":
         output_dir="out/models"
     )
 
+s
