@@ -6,7 +6,7 @@ import argparse
 
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
-from scipy.stats import ttest_ind, f_oneway
+
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
@@ -17,16 +17,12 @@ from plotnine import (
     element_text, element_blank, element_line,      # ← element_line 임포트
     facet_wrap
 )
-from scipy.stats import friedmanchisquare, wilcoxon
-from statsmodels.stats.multitest import multipletests
-
 import matplotlib.pyplot as plt
 from textgrid import TextGrid
-from tqdm import tqdm
 
 # 전역 경로 설정
 DATA_DIR = "/data1/users/yugwon/SDRW2"
-OUTPUT_DIR = "out/fig4/"
+OUTPUT_DIR = "out/fig5/"
 PKL_DIR = "data/pkl/1000-mf-90-100"
 
 # 남녀별 TCoG와 Points(pct) 데이터를 저장할 리스트
@@ -353,7 +349,7 @@ def run_kmeans_and_visualize(features_array, valid_indices, points_pct_data, tit
                 plt.plot(times, f0s, color=colors(cluster_id), alpha=0.4)
 
             plt.plot([], [], color=colors(cluster_id),
-                     label=f"Cluster {cluster_id} (Mean TCoG={mean_tcog:.2f})")
+                     label=f"Cluster {cluster_id}")
 
         plt.title(f"K={n_clusters} Clusters [{title_suffix}]")
         plt.xlabel("Time (%)")
@@ -483,7 +479,7 @@ def run_mixture_and_visualize(features_array, valid_indices, points_pct_data,
 
     for n_clusters in cluster_candidates:
         # 디폴트 값 사용
-        if model_tag == "GM":              
+        if model_tag == "GMM":              
             model = GaussianMixture(
                 n_components = n_clusters,
                 n_init = 10,
@@ -516,7 +512,7 @@ def run_mixture_and_visualize(features_array, valid_indices, points_pct_data,
                 plt.plot(times, f0s, color=colors(cluster_id), alpha=0.4)
 
             plt.plot([], [], color=colors(cluster_id),
-                     label=f"Cluster {cluster_id} (Mean TCoG={mean_tcog:.2f})")
+                     label=f"Cluster {cluster_id}")
 
         plt.title(f"{model_tag} K={n_clusters} [{title_suffix}]")
         plt.xlabel("Time (%)"); plt.xlim(90, 100)
@@ -725,7 +721,7 @@ if __name__ == '__main__':
                              "Female", use_pca=args.use_pca)
 
     run_mixture_and_visualize(features_F, valid_indices_F, points_pct_data_F,
-                          "Female", "GM",
+                          "Female", "GMM",
                           use_pca=args.use_pca)
     
     run_mixture_and_visualize(features_F, valid_indices_F, points_pct_data_F,
@@ -748,7 +744,7 @@ if __name__ == '__main__':
                              "Male", use_pca=args.use_pca)
     
     run_mixture_and_visualize(features_M, valid_indices_M, points_pct_data_M,
-                          "Male", "GM",
+                          "Male", "GMM",
                           use_pca=args.use_pca)
 
     run_mixture_and_visualize(features_M, valid_indices_M, points_pct_data_M,
