@@ -469,7 +469,8 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, device,
             probs   = torch.sigmoid(logits)
             preds   = (probs >= 0.5).long()
             correct += (preds == y_batch).sum().item()
-
+        
+        avg_train_loss = total_loss / len(train_loader)
         train_acc = correct / len(train_loader.dataset)
         train_losses.append(total_loss / len(train_loader))
         train_accuracies.append(train_acc)
@@ -494,8 +495,10 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, device,
                 probs = torch.sigmoid(logits)
                 preds = (probs >= 0.5).long()
                 valid_correct += (preds == y_batch).sum().item()
+        
 
         # 4) 지표 집계
+        avg_valid_loss = valid_loss / len(valid_loader)
         valid_acc = valid_correct / len(valid_loader.dataset)
         valid_losses.append(valid_loss / len(valid_loader))
         valid_accuracies.append(valid_acc)
@@ -506,10 +509,10 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, device,
 
         # 6) 로그 출력 및 체크포인트 저장
         logger.info(
-            f"Epoch [{epoch+1}/{num_epochs}] "
-            f"Train Loss: {total_loss:.4f}, Valid Loss: {valid_loss:.4f}, "
-            f"Train Acc: {train_acc:.4f}, Valid Acc: {valid_acc:.4f}"
-        )
+        f"Epoch [{epoch+1}/{num_epochs}] "
+        f"Train Loss: {avg_train_loss:.4f}, Valid Loss: {avg_valid_loss:.4f}, "
+        f"Train Acc: {train_acc:.4f}, Valid Acc: {valid_acc:.4f}"
+    )
         if valid_loss < best_valid_loss:
             best_valid_loss = valid_loss
             torch.save(model.state_dict(), checkpoint_path)
