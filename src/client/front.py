@@ -152,21 +152,24 @@ def create_gradio_interface():
         "number_of_candidates": 15,
         "very_accurate": 1,
         "show_spline": False,
-        "fixed_y_range": 600
+        "is_synthesis_save": False,
+        "is_spline_syntheis_save": False,
+        "fixed_y_min": 0,
+        "fixed_y_max": 600
     }
 
     with gr.Blocks(css=".custom-box {margin-top: 20px;}") as main:
         # 프로그램 제목과 설명
         with gr.Column():
-            gr.Label(value="✨ 한국어 억양 주석기 클라이언트✨", label="")
+            gr.Label(value="KOINA: 한국어 억양 자동 주석기", label="")
             gr.Textbox(
                 value=(
-                    "📂 이 프로그램은 음성 파일 경로와 음성 전사 텍스트 칼럼으로 구성된 CSV(TSV)파일을 입력으로 사용하여"
-                    "발화에서 억양을 분석하고 자동으로 전사합니다.\n\n"
+                    "📂 KOINA는 음성 파일 목록이 담긴 CSV/TSV 파일을 이용해, 여러 발화의 억양을 일괄적으로 분석하고 주석합니다.\n\n"
                     "👉 사용 방법:\n"
-                    "1️⃣ CSV(TSV) 파일을 선택하세요.(칼럼 구성 예: wav_filename(*.wav), sex(M,F), text)\n"
-                    "2️⃣ 매개변수(parameter) 값을 설정하고 작업 시작 버튼을 누르세요.\n"
-                    "3️⃣ 작업을 중단하려면 중단 버튼을 누르세요. 재시작시 해당 음성의 모든 산출물이 존재한다면 건너뜁니다."
+                    "1️⃣ 파일 준비: filename(음성 파일명), sex(성별) text(전사 텍스트) 칼럼으로 구성된 CSV/TSV 파일을 준비하세요. (예: filename, sex, text)\n"
+                    "2️⃣ 분석 실행: 파일을 업로드하고, 하단의 분석 매개변수를 설정한 뒤 [작업 시작] 버튼을 누르세요.\n"
+                    "3️⃣ 작업 중단: 분석을 멈추고 싶을 때는 언제든 [중단] 버튼을 누를 수 있습니다.\n"
+                    "💡 팁: 분석을 중단했다가 다시 시작하면, 이미 처리가 완료된 파일은 건너뛰고 다음 파일부터 자동으로 이어서 분석합니다."
                 ),
                 lines=6,
                 interactive=False,
@@ -215,15 +218,30 @@ def create_gradio_interface():
             inputs=[use_gender_range],
             outputs=[M_min, M_max, F_min, F_max],
         )
-
-        # 스플라인 옵션 선택
-        gr.Markdown("### 📐 Spline Option")
-        show_spline = gr.Checkbox(label="스플라인 윤곽 그래프 출력", value=default_config["show_spline"])
         
+        # 합성 음성 저장 여부 선택(boolean)
+        gr.Markdown("### 📂 Output Options")
+        # 체크박스로 합성 음성 저장 여부 선택
+        with gr.Row():
+            is_synthesis_save = gr.Checkbox(
+                label = "F0 목표점 최소화 합성 음성 저장",
+                value = default_config["is_synthesis_save"],
+                interactive = True)
+            show_spline = gr.Checkbox(
+                label = "연결 곡선(spline) 윤곽 그래프 출력",
+                value = default_config["show_spline"])
+            is_spline_syntheis_save = gr.Checkbox(
+                label = "연결 곡선(spline) 윤곽 합성 음성 저장",
+                value = default_config["is_spline_syntheis_save"],
+                interactive = True)
+            
         # 정규화 옵션 선택
-        gr.Markdown("### 📐 Normalize Option")
-        fixed_y_range = gr.Textbox(label="Fixed Y axis Range", placeholder="기본값: 600")
-
+        gr.Markdown("### 📐 Normalization Option")
+        with gr.Row():
+            fixed_y_min = gr.Textbox(label="Y축 최솟값 (Y-axis Min)", placeholder="기본값: 0")
+            fixed_y_max = gr.Textbox(label="Y축 최댓값 (Y-axis Max)", placeholder="기본값: 600")
+        
+        
         # 버튼 및 상태 출력
         start_button = gr.Button("작업 시작")
         stop_button = gr.Button("작업 중단", visible=False)
@@ -240,9 +258,11 @@ def create_gradio_interface():
         def start_transcription(tsv_file, min_pitch, max_pitch, time_step,
                         silence_threshold, voicing_threshold, octave_cost, octave_jump_cost, voice_unvoiced_cost,
                         number_of_candidates, very_accurate,
-                        show_spline, fixed_y_range,
+                        show_spline, 
+                        fixed_y_min, fixed_y_max,
                         use_gender_range_val,
-                        M_min_val, M_max_val, F_min_val, F_max_val):
+                        M_min_val, M_max_val, F_min_val, F_max_val,
+                        is_synthesis_save, is_spline_syntheis_save):
             try:
                 if not tsv_file:
                     return gr.update(), gr.update(), "", "❌ 오류: TSV/CSV 파일이 선택되지 않았습니다."
@@ -262,7 +282,10 @@ def create_gradio_interface():
                     "very_accurate": validate_and_convert(very_accurate, default_config["very_accurate"], float, "Very Accurate"),
                     "use_gender_range": use_gender_range_val,
                     "show_spline": show_spline,
-                    "fixed_y_range":validate_and_convert(fixed_y_range, default_config["fixed_y_range"], float, "Fixed Y axis Range")
+                    "fixed_y_min": validate_and_convert(fixed_y_min, default_config.get("fixed_y_min", 0), float, "Y axis minimum"),
+                    "fixed_y_max": validate_and_convert(fixed_y_max, default_config.get("fixed_y_max", 600), float, "Y axis maximum"),
+                    "is_synthesis_save": is_synthesis_save,
+                    "is_spline_syntheis_save": is_spline_syntheis_save
                 }
                 if use_gender_range_val:
                     config["min_pitch_male"] = float(M_min_val) if M_min_val else 75.0
@@ -304,9 +327,10 @@ def create_gradio_interface():
                 silence_threshold, voicing_threshold, octave_cost, octave_jump_cost, voice_unvoiced_cost,
                 number_of_candidates, very_accurate,
                 show_spline,
-                fixed_y_range,
+                fixed_y_min, fixed_y_max,
                 use_gender_range,
-                M_min, M_max, F_min, F_max
+                M_min, M_max, F_min, F_max,
+                is_synthesis_save, is_spline_syntheis_save
             ],
             outputs=[start_button, stop_button, log_output, status_output]
         )

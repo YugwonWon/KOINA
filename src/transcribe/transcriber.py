@@ -108,7 +108,10 @@ class IntonationTranscriber:
             "octave_jump_cost": 0.5,
             "voice_unvoiced_cost": 0.2,
             "show_spline": False,
-            "fixed_y_range": 600,
+            "is_synthesis_save": False,
+            "is_spline_syntheis_save": False,
+            "fixed_y_min": 0,
+            "fixed_y_max": 600,
             "momel_parameters": "30 60 750 1.04 20 5 0.05",
             "momel_path": momel_path
         }
@@ -592,7 +595,7 @@ class IntonationTranscriber:
                     label='Spline Contour')
 
         # y축 범위 (예시: 0~600Hz)
-        # ax.set_ylim(0, 500)
+        # ax.set_ylim(0, 600)
 
         ax.set_ylabel("Frequency (Hz)")
         ax.set_title(title, fontproperties=self.fontprop)
@@ -697,14 +700,13 @@ class IntonationTranscriber:
         plt.close()
         logger.info(f"Doubling/Halving 제거된 음높이 포인트 그래프가 저장되었습니다: {output_path}")
 
-    def plot_spline_contour(self, times, f0_values, output_path, corrected_times, corrected_f0_values, y_fixed_range=None):
+    def plot_spline_contour(self, times, f0_values, output_path, corrected_times, corrected_f0_values):
         """
         삼차 스플라인 음높이 포인트를 사용하여 그래프를 그려서 저장합니다.
         """
         fig, ax = plt.subplots(figsize=(15, 5))
         # y축 고정 (사용자가 입력한 범위 적용)
-        if y_fixed_range:
-            ax.set_ylim((0, y_fixed_range))
+        ax.set_ylim((self.settings['fixed_y_min'], self.settings['fixed_y_max']))
         self.plot_graph_with_annotations(ax, times, f0_values, "삼차 스플라인 음높이 윤곽", "Spline Pitch Contour", show_spline=self.settings['show_spline'], corrected_times=corrected_times, corrected_f0_values=corrected_f0_values)
         plt.savefig(output_path, format="jpg", pil_kwargs={"quality": 85})
         plt.close()
@@ -729,7 +731,7 @@ class IntonationTranscriber:
 
         # y축 고정 (사용자가 입력한 범위 적용)
         if y_fixed_range:
-            ax.set_ylim((0, y_fixed_range))
+            ax.set_ylim((self.settings['fixed_y_min'], self.settings['fixed_y_max']))
             
         # x축과 y축 레이블 설정
         ax.set_xlabel("Time (%)", labelpad=5, loc='right')
@@ -851,20 +853,21 @@ class IntonationTranscriber:
             # # 첫 번째 변조된 음성 생성
             # self.synthesize_pitch_modified_wav(modified_wav_path, times, f0_values)
 
-            # 기울기 기반 단순화 적용
+            # 기울기 기반 목표점 최소화 적용
             simplified_times, simplified_f0_values = self.simplify_pitch_points_by_slope(times, f0_values)
 
-            # 단순화된 음높이 포인트 그래프 저장
+            # 목표점 최소화 음높이 포인트 그래프 저장
             self.plot_simplified_pitch_contour(simplified_times, simplified_f0_values, minimalized_image_path)
 
-            # 단순화된 음높이로 두 번째 변조된 음성 생성
-            self.synthesize_pitch_modified_wav(minimalized_wav_path, simplified_times, simplified_f0_values)
+            # 목표점 최소화 음높이로 두 번째 변조된 음성 생성
+            if self.settings['is_synthesis_save']:
+                self.synthesize_pitch_modified_wav(minimalized_wav_path, simplified_times, simplified_f0_values)
 
             # 최종 음높이 포인트 percentage로 저장
             self.add_percentage_points_tier(simplified_times, simplified_f0_values)
             
             # 백분율 그래프 산출
-            self.plot_percentage_pitch_contour(simplified_times, simplified_f0_values, percentage_image_path, y_fixed_range=self.settings["fixed_y_range"])
+            self.plot_percentage_pitch_contour(simplified_times, simplified_f0_values, percentage_image_path)
             
             # Points 티어를 보정된 데이터로 업데이트
             points_tier.points.clear()
@@ -874,10 +877,13 @@ class IntonationTranscriber:
             # 3차 스플라인 적용 및 결과 출력
             spline_times, spline_f0_values = self.apply_cubic_spline(simplified_times, simplified_f0_values)
             
-            self.plot_spline_contour(spline_times, spline_f0_values, spline_image_path, simplified_times, simplified_f0_values, y_fixed_range=self.settings["fixed_y_range"])
+            # 스플라인 음높이 포인트 그래프 저장
+            if self.settings['show_spline']:
+                self.plot_spline_contour(spline_times, spline_f0_values, spline_image_path, simplified_times, simplified_f0_values)
 
-            # # 3차 스플라인 기반으로 WAV 파일 생성
-            # self.synthesize_spline_modified_wav(spline_wav_path, spline_times, spline_f0_values)
+            # 3차 스플라인 기반으로 WAV 파일 생성
+            if self.settings['is_spline_syntheis_save']:
+                self.synthesize_spline_modified_wav(spline_wav_path, spline_times, spline_f0_values)
 
 
     def remove_doubling_halving(
@@ -1090,9 +1096,12 @@ def process_files(tsv_file: str, output_dir: str, momel_path: str, stop_flag):
                             logger.info("작업이 중단되었습니다.")
                             return
                         
-                        wav_file_name = row.get("wav_filename", "").strip()
+                        wav_file_name = row.get("filename", "").strip()
                         transcript = row.get("text", "")
                         sex = row.get("sex", "")
+                        # if "SDRW2200000048.1.1.47" not in wav_file_name:
+                        #     continue
+                        logger.info(wav_file_name)
                         if wav_file_name not in wav_dict:
                             logger.warning(f"WAV 파일을 찾을 수 없습니다: {wav_file_name}")
                             continue
@@ -1132,7 +1141,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="억양 자동 전사 도구 (TSV 입력)")
     parser.add_argument("tsv_file", type=str, nargs='?', default="data/output.tsv",
                         help="입력 TSV 파일 경로 (wavfile_path와 text 컬럼 포함)")
-    parser.add_argument("output_dir", type=str, nargs='?', default='out/outputs4',
+    parser.add_argument("output_dir", type=str, nargs='?', default='out/outputs',
                         help="출력 TextGrid 파일들이 저장될 디렉토리 경로")
     parser.add_argument("--momel_path", type=str, default="src/lib/momel/momel_linux",
                         help="Momel 실행 파일 경로")
