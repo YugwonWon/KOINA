@@ -21,9 +21,10 @@ from parselmouth.praat import call
 
 from textgrid import TextGrid, IntervalTier, PointTier
 
-from client.aligner import BaikalSTTClient
 from utils.logger import main_logger
-
+from utils.file_ops import collect_wav_files, detect_delimiter
+from aligner import MFAAligner, tg_to_alignment
+from pathlib import Path
 # 자식 로거 설정
 logger = main_logger.getChild('transcriber')
 
@@ -38,15 +39,15 @@ class IntonationTranscriber:
     """
     억양 자동 전사 클래스
     """
-    _baikal_client = None
+    _aligner = None
     _fontprop = None
     _settings = None
 
     @classmethod
-    def get_baikal_client(cls):
-        if cls._baikal_client is None:
-            cls._baikal_client = BaikalSTTClient()
-        return cls._baikal_client
+    def get_aligner(cls):
+        if cls._aligner is None:
+            cls._aligner = MFAAligner()
+        return cls._aligner
 
     @classmethod
     def get_fontprop(cls):
@@ -131,7 +132,7 @@ class IntonationTranscriber:
 
         # cls 변수
         self.settings = self.get_settings(config_path, momel_path)
-        self.baiakal_client = self.get_baikal_client()
+        self.aligner = self.get_aligner()
         self.fontprop = self.get_fontprop()
         self.alignment = None
 
@@ -155,7 +156,7 @@ class IntonationTranscriber:
         강제 정렬 수행
         """
         logger.info(f"강제 정렬을 시작합니다... (파일: {self.wav_file})")
-        self.alignment = self.baiakal_client.align(self.wav_file, self.transcript)
+        self.alignment = self.aligner.align(self.wav_file, self.transcript)
         if not self.alignment:
             raise ValueError(f"강제 정렬에 실패했습니다. (파일: {self.wav_file})")
         logger.info(f"강제 정렬이 완료되었습니다. (파일: {self.wav_file})")
@@ -1019,7 +1020,6 @@ class IntonationTranscriber:
 
         try:
             # 기본 전사 및 TextGrid 생성
-            self.perform_alignment()
             self.create_textgrid()
             self.run_momel_based_labels()
             self.add_tcog_tier()
@@ -1046,92 +1046,87 @@ class IntonationTranscriber:
             return
 
 
-
-def collect_wav_files(base_dir: str):
-    """
-    지정된 디렉토리에서 모든 WAV 파일을 검색하고, 파일명-경로 매핑 딕셔너리를 생성합니다.
-    """
-    wav_dict = {}
-    for root, _, files in os.walk(base_dir):
-        for file in files:
-            if file.lower().endswith(".wav"):
-                file_name = os.path.basename(file)
-                wav_dict[file_name] = os.path.join(root, file)
-    logger.info(f"WAV 파일 {len(wav_dict)}개를 검색했습니다.")
-    return wav_dict
-
-def detect_delimiter(file_path: str):
-    """
-    파일 확장자에 따라 구분자를 반환합니다.
-    """
-    if file_path.endswith(".tsv"):
-        return '\t'
-    elif file_path.endswith(".csv"):
-        return ','
-    else:
-        raise ValueError("지원하지 않는 파일 형식(확장자)입니다. TSV 또는 CSV 파일만 가능합니다.")
-
 def process_files(tsv_file: str, output_dir: str, momel_path: str, stop_flag):
     """
-    CSV 또는 TSV 파일을 읽어 각 행의 파일명을 기반으로 WAV 파일 경로를 매핑하고 처리합니다.
+    TSV 파일을 읽어 전체 파일 목록에 대해 MFA 배치 정렬을 먼저 수행하고,
+    각 정렬 결과를 IntonationTranscriber에 전달하여 후속 처리를 진행합니다.
     """
     logger.info(f"입력 파일을 처리합니다: {tsv_file}")
     os.makedirs(output_dir, exist_ok=True)
-    
-    # 상대 경로로 out 디렉토리에서 WAV 파일 검색
-    wav_root_dir = "out"  # 상대 경로로 설정, 로컬에서 도커를 실행할 때 wav 파일이 여기에 마운트되어야 한다. 
+
+    # WAV 파일 목록을 준비합니다.
+    wav_root_dir = "data/tobi"  # wav 파일이 있는 상대 경로
     wav_dict = collect_wav_files(wav_root_dir)
 
+    pairs = []  # (wav_path, transcript) 목록
+    info_list = []  # 각 파일에 대한 추가 정보 (예: sex, output_textgrid)
     try:
         delimiter = detect_delimiter(tsv_file)
         with open(tsv_file, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f, delimiter=delimiter)
-            rows = list(reader)  # tqdm을 사용하기 위해 전체 rows를 리스트로 변환
-
-            # logging_redirect_tqdm으로 tqdm 출력 연결
-            with logging_redirect_tqdm():
-                for row in tqdm(rows, desc="Processing WAV files", unit="file"):
-                    try:
-                        if stop_flag and stop_flag.is_set():  # 작업 중지 플래그 확인
-                            logger.info("작업이 중단되었습니다.")
-                            return
-                        
-                        wav_file_name = row.get("filename", "").strip()
-                        transcript = row.get("text", "")
-                        sex = row.get("sex", "")
-                        # if "SDRW2200000048.1.1.47" not in wav_file_name:
-                        #     continue
-                        logger.info(wav_file_name)
-                        if wav_file_name not in wav_dict:
-                            logger.warning(f"WAV 파일을 찾을 수 없습니다: {wav_file_name}")
-                            continue
-                        
-                        wav_file_path = wav_dict[wav_file_name]
-                        base_name = os.path.splitext(os.path.basename(wav_file_path))[0]
-                        
-                        # 출력 디렉토리 생성
-                        os.makedirs(f"{output_dir}/{base_name.split('.')[0]}", exist_ok=True)
-                        output_textgrid = os.path.join(f"{output_dir}/{base_name.split('.')[0]}", f"{base_name}_{sex}.TextGrid")
-                        
-                        # IntonationTranscriber 실행
-                        transcriber = IntonationTranscriber(
-                            wav_file=wav_file_path,
-                            transcript=transcript,
-                            sex=sex,
-                            output_textgrid=output_textgrid,
-                            momel_path=momel_path
-                        )
-
-                        logger.info(f"처리 중: {wav_file_path}")
-                        transcriber.run()
-                        
-                    except:
-                        logger.error(f"error 건너뜀: {wav_file_path}")
-                        continue
-                    
+            for row in reader:
+                wav_file_name = row.get("filename", "").strip()
+                transcript = row.get("text", "")
+                sex = row.get("sex", "")
+                logger.info(wav_file_name)
+                if wav_file_name not in wav_dict:
+                    logger.warning(f"WAV 파일을 찾을 수 없습니다: {wav_file_name}")
+                    continue
+                wav_file_path = wav_dict[wav_file_name]
+                base_name = os.path.splitext(os.path.basename(wav_file_path))[0]
+                # 출력 디렉토리 생성
+                out_subdir = f"{output_dir}/{base_name.split('.')[0]}"
+                os.makedirs(out_subdir, exist_ok=True)
+                output_textgrid = os.path.join(out_subdir, f"{base_name}_{sex}.TextGrid")
+                pairs.append((wav_file_path, transcript))
+                info_list.append({
+                    "wav_path": wav_file_path,
+                    "sex": sex,
+                    "output_textgrid": output_textgrid
+                })
     except Exception as e:
-        logger.error(f"파일을 처리하는 도중 에러가 발생했습니다.\n{traceback.format_exc()}")
-        
+        logger.error(f"파일을 준비하는 도중 에러 발생:\n{traceback.format_exc()}")
+        return
+
+    if not pairs:
+        logger.info("처리할 파일이 없습니다.")
+        return
+
+    aligner = MFAAligner()
+    try:
+        grid_dict = aligner.align_batch(pairs, njobs=aligner.njobs)
+    except Exception as e:
+        logger.error(f"MFA 배치 정렬 실패: {e}")
+        return
+
+    # 배치 정렬 결과(grid_dict)는 파일명(stem)을 key로 함
+    for info in info_list:
+        wav_path = Path(info["wav_path"]).expanduser().resolve()
+        base     = wav_path.stem
+        output_textgrid = info["output_textgrid"]
+        sex = info["sex"]
+        tg       = grid_dict.get(base)
+        # IntonationTranscriber 생성 시 미리 정렬 결과를 전달합니다.
+        transcriber = IntonationTranscriber(
+            wav_file=str(wav_path),
+            transcript="",  # 이미 정렬 결과가 있으므로 transcript는 필요없거나 빈 값으로 처리
+            sex=sex,
+            output_textgrid=output_textgrid,
+            momel_path=momel_path
+        )
+        # MFAAligner에서 얻은 TextGrid 정렬 결과를 주입
+        transcriber.alignment = tg_to_alignment(tg)
+
+        logger.info(f"처리 중: {wav_path}")
+        try:
+            # transcriber.run() 내부에서는 perform_alignment를 건너뛰도록
+            # (alignment가 이미 존재하면 perform_alignment를 호출하지 않게 수정)
+            transcriber.run()
+        except Exception as e:
+            logger.error(f"error 건너뜀: {wav_path}")
+            logger.error(traceback.format_exc())
+            continue
+
     logger.info("모든 파일 처리가 완료되었습니다.")
 
 if __name__ == '__main__':
@@ -1139,30 +1134,14 @@ if __name__ == '__main__':
     from threading import Event
 
     parser = argparse.ArgumentParser(description="억양 자동 전사 도구 (TSV 입력)")
-    parser.add_argument("tsv_file", type=str, nargs='?', default="data/output.tsv",
+    parser.add_argument("tsv_file", type=str, nargs='?', default="data/k-tobi-ex.tsv",
                         help="입력 TSV 파일 경로 (wavfile_path와 text 컬럼 포함)")
-    parser.add_argument("output_dir", type=str, nargs='?', default='out/outputs',
+    parser.add_argument("output_dir", type=str, nargs='?', default='out/outputs100',
                         help="출력 TextGrid 파일들이 저장될 디렉토리 경로")
     parser.add_argument("--momel_path", type=str, default="src/lib/momel/momel_linux",
                         help="Momel 실행 파일 경로")
 
     args = parser.parse_args()
-
-    def create_symbolic_link(target, link_name):
-        try:
-            # 심볼릭 링크가 이미 존재하면 제거
-            if os.path.islink(link_name) or os.path.exists(link_name):
-                os.remove(link_name)
-            # 심볼릭 링크 생성
-            os.symlink(target, link_name)
-            print(f"Symbolic link created: {link_name} -> {target}")
-        except PermissionError:
-            print("Permission denied. Trying with sudo...")
-            # sudo를 사용해 심볼릭 링크 생성
-            subprocess.run(["sudo", "ln", "-s", target, link_name], check=True)
-            print(f"Symbolic link created with sudo: {link_name} -> {target}")
-        except Exception as e:
-            print(f"Error creating symbolic link: {e}")
 
     # 중지 플래그 생성
     stop_flag = Event()
