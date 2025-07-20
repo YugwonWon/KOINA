@@ -11,6 +11,7 @@ import logging
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 
@@ -52,7 +53,7 @@ class IntonationTranscriber:
     @classmethod
     def get_fontprop(cls):
         if cls._fontprop is None:
-            cls._fontprop = cls.set_korean_font(cls)
+            cls._fontprop = cls.set_korean_font()
         return cls._fontprop
 
     @classmethod
@@ -64,16 +65,33 @@ class IntonationTranscriber:
     @classmethod
     def set_korean_font(cls):
         """
-        한글 폰트를 설정하여 반환합니다.
+        한글 + IPA 가 모두 표시되도록 다중-폰트(fallback) 설정
         """
-        font_path = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
-        if not os.path.exists(font_path):
-            print("경고: 한글 폰트를 찾을 수 없습니다.")
+        candidates = [
+            # 한글·라틴
+            "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            # IPA
+            "/usr/local/share/fonts/NotoSansPhonetic-Regular.ttf",   # 수동 설치 시
+            "/usr/share/fonts/truetype/noto/NotoSansPhonetic-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/charis/CharisSIL-Regular.ttf",
+        ]
+
+        fams = []
+        for fp in candidates:
+            if os.path.exists(fp):
+                fm.fontManager.addfont(fp)
+                fams.append(fm.FontProperties(fname=fp).get_name())
+
+        if not fams:                       # 아무 글꼴도 없으면 경고만
+            logger.warning("⚠️  한글·IPA 글리프를 가진 폰트를 찾지 못했습니다.")
             return None
-        else:
-            fontprop = fm.FontProperties(fname=font_path)
-            plt.rc('font', family=fontprop.get_name())
-            return fontprop
+
+        mpl.rcParams["font.family"] = fams        # ['Noto Sans CJK KR', …]
+        mpl.rcParams["axes.unicode_minus"] = False
+        return fm.FontProperties(family=fams)  # 첫 번째를 기본 반환
 
     @classmethod
     def load_config(cls, config_path="out/config.json", momel_path="src/lib/momel/momel_linux"):
