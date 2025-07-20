@@ -17,7 +17,7 @@ RUN apt-get update && \
         ca-certificates curl gnupg2 && \
     update-ca-certificates && \
     apt-get install -y --no-install-recommends \
-        tzdata ffmpeg libsndfile1 supervisor fontconfig fonts-nanum && \
+        tzdata ffmpeg libsndfile1 fontconfig fonts-nanum && \
     rm -rf /var/lib/apt/lists/*
 
 ########################
@@ -46,7 +46,6 @@ RUN ${CONDA_DIR}/bin/conda config --set auto_activate_base false && \
 RUN ${CONDA_DIR}/bin/conda run -n mfa conda install -y \
         montreal-forced-aligner==3.2.1 \
         numpy pandas scipy matplotlib tqdm \
-        protobuf=3.20 grpcio grpcio-reflection \
         textgrid pydub ffmpeg-python && \
     ${CONDA_DIR}/bin/conda run -n mfa pip install joblib==1.1.0 && \
     ${CONDA_DIR}/bin/conda run -n mfa pip install gradio soundfile==0.12.1 praat-parselmouth
@@ -60,16 +59,19 @@ RUN ${CONDA_DIR}/bin/conda run -n mfa mfa model download dictionary korean_mfa &
 ########################
 WORKDIR /koina
 COPY src/ ./src/
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 ENV PYTHONPATH=/koina/src
 
 ########################
 # 7. 포트 & 로그
 ########################
-EXPOSE 7861
-RUN mkdir -p /koina/logs
+EXPOSE 40080
 
+ENV PATH=/opt/conda/envs/mfa/bin:/opt/conda/bin:$PATH
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 ########################
 # 8. 진입점
 ########################
-CMD ["/opt/conda/bin/conda", "run", "-n", "mfa", "/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["python", "/koina/src/client/front.py"]
