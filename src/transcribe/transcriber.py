@@ -24,7 +24,7 @@ from textgrid import TextGrid, IntervalTier, PointTier
 
 from utils.logger import main_logger
 from utils.file_ops import collect_wav_files, detect_delimiter
-from aligner import MFAAligner, tg_to_alignment
+from transcribe.aligner import MFAAligner, tg_to_alignment
 from pathlib import Path
 # 자식 로거 설정
 logger = main_logger.getChild('transcriber')
@@ -1067,8 +1067,7 @@ class IntonationTranscriber:
             logger.error(traceback.format_exc())
             return
 
-
-def process_files(tsv_file: str, output_dir: str, momel_path: str, stop_flag):
+def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib/momel/momel_linux", ):
     """
     TSV 파일을 읽어 전체 파일 목록에 대해 MFA 배치 정렬을 먼저 수행하고,
     각 정렬 결과를 IntonationTranscriber에 전달하여 후속 처리를 진행합니다.
@@ -1077,7 +1076,7 @@ def process_files(tsv_file: str, output_dir: str, momel_path: str, stop_flag):
     os.makedirs(output_dir, exist_ok=True)
 
     # WAV 파일 목록을 준비합니다.
-    wav_root_dir = "data/tobi"  # wav 파일이 있는 상대 경로
+    wav_root_dir = "out"  # wav 파일이 있는 상대 경로
     wav_dict = collect_wav_files(wav_root_dir)
 
     pairs = []  # (wav_path, transcript) 목록
@@ -1161,13 +1160,11 @@ if __name__ == '__main__':
     import argparse
     from threading import Event
 
-    parser = argparse.ArgumentParser(description="억양 자동 전사 도구 (TSV 입력)")
-    parser.add_argument("tsv_file", type=str, nargs='?', default="data/k-tobi-ex.tsv",
+    parser = argparse.ArgumentParser(description="억양 자동 주석 도구 (TSV 입력)")
+    parser.add_argument("tsv_file", type=str, nargs='?', default="input.tsv",
                         help="입력 TSV 파일 경로 (wavfile_path와 text 컬럼 포함)")
-    parser.add_argument("output_dir", type=str, nargs='?', default='out/outputs100',
+    parser.add_argument("output_dir", type=str, nargs='?', default='out',
                         help="출력 TextGrid 파일들이 저장될 디렉토리 경로")
-    parser.add_argument("--momel_path", type=str, default="src/lib/momel/momel_linux",
-                        help="Momel 실행 파일 경로")
 
     args = parser.parse_args()
 
@@ -1177,6 +1174,5 @@ if __name__ == '__main__':
     process_files(
         tsv_file=args.tsv_file,
         output_dir=args.output_dir,
-        momel_path=args.momel_path,
         stop_flag=stop_flag  # 중지 플래그 전달
     )
