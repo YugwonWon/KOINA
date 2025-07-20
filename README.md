@@ -1,4 +1,5 @@
 # KOINA (Korean Intonation Annotator)
+
 <p align="center">
   <img src="https://github.com/user-attachments/assets/6e4d95ca-9c29-46cb-b543-d0d3bf245f25" width="400">
 </p>
@@ -10,6 +11,7 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
 ---
 
 ## 목차
+
 1. **주요 기능**
 2. **Docker 환경에서의 사용 방법**
 3. **Python 환경에서의 사용 방법**
@@ -20,23 +22,25 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
 ---
 
 ## 1. 주요 기능
+
 1. **Momel 기반 억양 윤곽 추적**
+
    - 음높이(F0) 목표점 추출: 알고리즘을 통해 F0 윤곽을 추출
    - 삼차 연결 곡선(spline) 적용: 목표점을 기반으로 곡선 형태의 억양 윤곽을 재현
    - TCoG 추출: 음높이 무게 중심
-
 2. **음성-텍스트 강제 정렬**
+
    - 어절 및 음소 레벨 정렬
    - 정렬 결과를 TextGrid 파일로 생성하여, 구간별 분석이 용이
-
 3. **F0 목표점 최소화**
+
    - 기울기 기반 단순화: F0 목표점을 제거하여 효율적인 윤곽 생성
    - 지각적 일관성 유지: 목표점을 단순화하여도 청각적 인식은 원본과 동일 수준 유지
-
 4. **Pitch Doubling/Halving 보정**
-   - 자동 감지 및 수정: 기존 F0 윤곽에서 배증 혹은 반감으로 튀는 오차를 보정하고 안정화
 
+   - 자동 감지 및 수정: 기존 F0 윤곽에서 배증 혹은 반감으로 튀는 오차를 보정하고 안정화
 5. **시각화 및 결과 저장**
+
    - TextGrid 파일 출력: Praat 등 음성 분석 툴과 호환 가능한 형식
    - JPEG 그래프 저장: 분석 결과를 바로 확인 가능한 이미지로 제공
    - 음성 합성 WAV 저장: 음성 합성된 WAV 파일 저장
@@ -44,39 +48,50 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
 ---
 
 ## 2. Docker 환경에서의 사용 방법
+
 KOINA는 공식 Docker 이미지를 통해 간편하게 실행할 수 있습니다. 로컬 환경에서 별도로 구축해야 할 의존성 없이, Docker 컨테이너 실행만으로 웹 인터페이스에 접근할 수 있습니다.
 
 1. **도커 설치**
-   - 로컬 컴퓨터에 Docker를 먼저 설치합니다. (운영체제별 설치 방법은 [Docker Docs](https://docs.docker.com/get-docker/) 참고)
 
+   - 로컬 컴퓨터에 Docker를 먼저 설치합니다. (운영체제별 설치 방법은 [Docker Docs](https://docs.docker.com/get-docker/) 참고)
 2. **이미지 받기 (pull)**
+
    ```bash
    docker pull linky1584/koina:latest
 
-3. **도커 실행**
-   - 아래 명령어(CMD)는 사용자가 로컬에 있는 오디오 파일들이 위치한 폴더 경로를 `/your/audio/path` 부분에 넣어 실행하는 예시입니다.
    ```
-   docker run --rm -p 7861:7861 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest
+3. **도커 실행**
 
+   - 아래 명령어(CMD)는 사용자가 로컬에 있는 오디오 파일들이 위치한 폴더 경로를 `/your/audio/path` 부분에 넣어 실행하는 예시입니다.
+
+   ```
+   docker run --rm -p 40080:40080 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest
+
+   ```
 4. **웹 인터페이스 실행**
-   - 도커를 실행했다면, 인터넷 창을 열고 아래 주소를 입력해서 클라이언트를 실행합니다. 
+
+   - 도커를 실행했다면, 인터넷 창을 열고 아래 주소를 입력해서 클라이언트를 실행합니다.
    - 실행되기까지 몇 분 정도 소요될 수 있습니다.
 
    ```
-   http://localhost:7861
+   http://localhost:40080
    ```
 
    <p align="center">
      <img src="https://github.com/user-attachments/assets/5887a465-1946-46f5-9ed8-2d0251ac2d16" width="1397">
    </p>
-
 5. **csv(tsv)파일 입력**
+
    - 아래는 CSV/TSV 파일 예시입니다. 각 열(컬럼)은 반드시 `wav_filename`, `sex`, `text` 순서를 지켜야 하며, CSV의 경우 쉼표로 구분하고, TSV의 경우 탭으로 구분하는 것만 다릅니다.
 
    #### TSV 예시
+
+
    ```tsv
    wav_filename    sex    text
    SDRW2200000001.1.1.1.wav    M    어 여기서 학교 얘기가 나와서
+
+   ```
 
 ## 3. Python 환경에서의 사용 방법
 
@@ -85,14 +100,16 @@ KOINA는 공식 Docker 이미지를 통해 간편하게 실행할 수 있습니�
 ---
 
 1. **사전 준비**
-   -  먼저 현재 리포지토리를 클론(clone)합니다. 예시로, 로컬 머신에서 다음 명령어를 사용할 수 있습니다:
+
+   - 먼저 현재 리포지토리를 클론(clone)합니다. 예시로, 로컬 머신에서 다음 명령어를 사용할 수 있습니다:
 
    ```bash
    git clone https://github.com/YugwonWon/KOINA.git
    ```
-
 2. **가상환경(venv) 생성 및 라이브러리 설치**
+
    - 연구 환경이나 서버별로 파이썬 라이브러리가 상이할 수 있으므로, 가능한 한 독립적인 가상환경을 마련하는 편이 좋습니다. 다음과 같은 절차로 venv를 생성하고 필요한 라이브러리를 설치할 수 있습니다:
+
    ```bash
    # 가상환경(venv) 생성
    python -m venv venv
@@ -107,32 +124,37 @@ KOINA는 공식 Docker 이미지를 통해 간편하게 실행할 수 있습니�
    # requirements 설치
    pip install -r requirements.txt
    ```
-
 3. **스크립트 실행**
-   - transcriber.py에는 억양 전사를 위한 핵심 로직이 포함되어 있으며, 터미널(또는 커맨드라인)에서 아규먼트를 지정해 실행할 수 있습니다. 예시 명령어는 다음과 같습니다:
+
+   - transcriber.py에는 억양 전사를 위한 핵심 로직이 포함되어 있으며, 터미널(또는 커맨드라인)에서 argument를 지정해 실행할 수 있습니다. 예시 명령어는 다음과 같습니다:
+
    ```bash
    python ./src/transcribe/transcriber.py \
     data/input.tsv \
     out \
-    --momel_path src/lib/momel/momel_linux
    ```
 
 ## 4. 이슈 보고 및 피드백
-프로젝트는 아직 완성 단계가 아니며, 다양한 실제 음성 분석 현장에서 얻은 피드백을 통해 개선될 여지가 많습니다.  
-- **버그 리포트**: 예기치 않은 오류가 발생했을 경우, 재현 가능한 단계와 로그 정보, 사용한 입력 파일(일부 샘플)을 보내주시면 문제 파악에 큰 도움이 됩니다.  
+
+프로젝트는 아직 완성 단계가 아니며, 다양한 실제 음성 분석 현장에서 얻은 피드백을 통해 개선될 여지가 많습니다.
+
+- **버그 리포트**: 예기치 않은 오류가 발생했을 경우, 재현 가능한 단계와 로그 정보, 사용한 입력 파일(일부 샘플)을 보내주시면 문제 파악에 큰 도움이 됩니다.
 - **기능 요청**: 추가로 필요한 기능이나 개선 사항이 있다면 자유롭게 이슈(이야기)를 남겨주세요.
 
 ---
 
 ## 5. Reference
+
 - 원유권(2025). 한국어 억양 자동 주석기 개발 연구, 건국대학교 대학원 박사학위논문. [링크]
 
 ---
 
 ## 6. Cites
- - 아래의 DOI 또는 BibTeX를 통해 인용해주세요.
- - DOI: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15034862.svg)](https://doi.org/10.5281/zenodo.15034862)
- - BibTeX:
+
+- 아래의 DOI 또는 BibTeX를 통해 인용해주세요.
+- DOI: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15034862.svg)](https://doi.org/10.5281/zenodo.15034862)
+- BibTeX:
+
 ```bibtex
 @misc{KOINA,
   author = {Won, YuGwon},
@@ -143,3 +165,4 @@ KOINA는 공식 Docker 이미지를 통해 간편하게 실행할 수 있습니�
   journal = {Github repository},
   note = {\url{https://github.com/YugwonWon/KOINA}}
 }
+```
