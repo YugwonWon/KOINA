@@ -154,21 +154,6 @@ class IntonationTranscriber:
         self.fontprop = self.get_fontprop()
         self.alignment = None
 
-
-
-    def set_korean_font(self):
-        """
-        한글 폰트를 설정하여 반환합니다.
-        """
-        font_path = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"  # 시스템에 설치된 한글 폰트 경로 설정
-        if not os.path.exists(font_path):
-            print("경고: 한글 폰트를 찾을 수 없습니다. 시스템 폰트를 확인하거나 경로를 수정하십시오.")
-            return None
-        else:
-            fontprop = fm.FontProperties(fname=font_path)
-            plt.rc('font', family=fontprop.get_name())
-            return fontprop
-
     def perform_alignment(self):
         """
         강제 정렬 수행
@@ -400,11 +385,19 @@ class IntonationTranscriber:
         # word 티어 생성
         word_tier = IntervalTier(name="word", minTime=0, maxTime=self.duration)
         self.textgrid.append(word_tier)
+        
+        # word_token 티어 생성
+        word_token_tier = IntervalTier(name="word_token", minTime=0, maxTime=self.duration)
+        self.textgrid.append(word_token_tier)
 
         # phoneme 티어 생성
         phoneme_tier = IntervalTier(name="phoneme", minTime=0, maxTime=self.duration)
         self.textgrid.append(phoneme_tier)
-
+        
+        # Ipa2kr 변환
+        phonkr_tier  = IntervalTier("phoneme_kr", 0, self.duration)
+        self.textgrid.append(phonkr_tier)
+        
         # alignment 데이터가 존재할 경우, word 및 phoneme 티어 채우기
         if self.alignment:
             # word 티어 채우기
@@ -426,6 +419,17 @@ class IntonationTranscriber:
                 if end > phoneme_tier.maxTime:
                     end = phoneme_tier.maxTime
                 phoneme_tier.add(start, end, text)
+            
+            # phoneme_kr 티어 채우기
+            phonemes_kr = self.alignment.get('phonemes_kr', [])
+            for phoneme in phonemes_kr:
+                start = phoneme.get('start', 0)
+                end = phoneme.get('end', 0)
+                text = phoneme.get('text', '')
+                if end > phonkr_tier.maxTime:
+                    end = phonkr_tier.maxTime
+                phonkr_tier.add(start, end, text)
+                
 
     def save_textgrid(self):
         """
@@ -1083,6 +1087,9 @@ def process_files(tsv_file: str, output_dir: str, momel_path: str, stop_flag):
         with open(tsv_file, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f, delimiter=delimiter)
             for row in reader:
+                if stop_flag.is_set():
+                    logger.info("처리 중지 요청이 감지되었습니다. 작업을 중단합니다.")
+                    return
                 wav_file_name = row.get("filename", "").strip()
                 transcript = row.get("text", "")
                 sex = row.get("sex", "")
@@ -1100,7 +1107,8 @@ def process_files(tsv_file: str, output_dir: str, momel_path: str, stop_flag):
                 info_list.append({
                     "wav_path": wav_file_path,
                     "sex": sex,
-                    "output_textgrid": output_textgrid
+                    "output_textgrid": output_textgrid,
+                    "transcript": transcript
                 })
     except Exception as e:
         logger.error(f"파일을 준비하는 도중 에러 발생:\n{traceback.format_exc()}")
@@ -1115,10 +1123,14 @@ def process_files(tsv_file: str, output_dir: str, momel_path: str, stop_flag):
         grid_dict = aligner.align_batch(pairs, njobs=aligner.njobs)
     except Exception as e:
         logger.error(f"MFA 배치 정렬 실패: {e}")
+        logger.error(traceback.format_exc())
         return
 
     # 배치 정렬 결과(grid_dict)는 파일명(stem)을 key로 함
     for info in info_list:
+        if stop_flag.is_set():
+            logger.info("처리 중지 요청이 감지되었습니다. 작업을 중단합니다.")
+            return
         wav_path = Path(info["wav_path"]).expanduser().resolve()
         base     = wav_path.stem
         output_textgrid = info["output_textgrid"]
@@ -1127,18 +1139,16 @@ def process_files(tsv_file: str, output_dir: str, momel_path: str, stop_flag):
         # IntonationTranscriber 생성 시 미리 정렬 결과를 전달합니다.
         transcriber = IntonationTranscriber(
             wav_file=str(wav_path),
-            transcript="",  # 이미 정렬 결과가 있으므로 transcript는 필요없거나 빈 값으로 처리
+            transcript=info["transcript"],
             sex=sex,
             output_textgrid=output_textgrid,
             momel_path=momel_path
         )
         # MFAAligner에서 얻은 TextGrid 정렬 결과를 주입
-        transcriber.alignment = tg_to_alignment(tg)
+        transcriber.alignment = tg_to_alignment(tg, info["transcript"])
 
         logger.info(f"처리 중: {wav_path}")
         try:
-            # transcriber.run() 내부에서는 perform_alignment를 건너뛰도록
-            # (alignment가 이미 존재하면 perform_alignment를 호출하지 않게 수정)
             transcriber.run()
         except Exception as e:
             logger.error(f"error 건너뜀: {wav_path}")
