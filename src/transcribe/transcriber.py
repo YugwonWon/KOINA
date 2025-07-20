@@ -1161,7 +1161,7 @@ if __name__ == '__main__':
     from threading import Event
 
     parser = argparse.ArgumentParser(description="억양 자동 주석 도구 (TSV 입력)")
-    parser.add_argument("tsv_file", type=str, nargs='?', default="input.tsv",
+    parser.add_argument("tsv_file", type=str, nargs='?', default="tests/samples/input.tsv",
                         help="입력 TSV 파일 경로 (wavfile_path와 text 컬럼 포함)")
     parser.add_argument("output_dir", type=str, nargs='?', default='out',
                         help="출력 TextGrid 파일들이 저장될 디렉토리 경로")
