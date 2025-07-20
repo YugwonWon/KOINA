@@ -175,8 +175,8 @@ DICT_PHONES = [
                 'βʷ'
             ]
 
-def ipa2kr(p): return IPA2KR.get(p, p)
-
-missing = sorted(p for p in DICT_PHONES if p not in IPA2KR)
-print(f"총 {len(missing)}개 unmapped:")
-print(shorten(" ".join(missing), width=100))
+def ipa2kr(p):
+    """
+    Convert IPA symbol to Korean Hangul character.
+    """
+    return IPA2KR.get(p, p)
