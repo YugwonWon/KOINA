@@ -26,7 +26,7 @@ class TranscriptionRunner:
         self.stop_flag = Event()
         self.log_lines = []
 
-    def start_transcription(self, tsv_file, output_dir, momel_path="src/lib/momel/momel_linux"):
+    def start_transcription(self, tsv_file, output_dir):
         if not os.path.exists(tsv_file):
             return "TSV 파일이 존재하지 않습니다."
         if self.thread and self.thread.is_alive():
@@ -37,7 +37,7 @@ class TranscriptionRunner:
         def run():
             try:
                 logger.info("작업 시작!")
-                process_files(tsv_file, output_dir, momel_path, self.stop_flag)
+                process_files(tsv_file, output_dir, self.stop_flag)
                 logger.info("작업 완료!")
             except Exception as e:
                 logger.error(f"오류 발생: {e}")
@@ -154,6 +154,7 @@ def create_gradio_interface():
         "show_spline": False,
         "is_synthesis_save": False,
         "is_spline_syntheis_save": False,
+        "is_only_alignment": False,
         "fixed_y_min": 0,
         "fixed_y_max": 600
     }
@@ -234,6 +235,11 @@ def create_gradio_interface():
                 label = "연결 곡선(spline) 윤곽 합성 음성 저장",
                 value = default_config["is_spline_syntheis_save"],
                 interactive = True)
+            is_only_alignment = gr.Checkbox(
+                label = "음성-텍스트 시간 정렬만 수행",
+                value = default_config["is_only_alignment"],
+                interactive = True
+            )
             
         # 정규화 옵션 선택
         gr.Markdown("### 📐 Normalization Option")
@@ -262,7 +268,8 @@ def create_gradio_interface():
                         fixed_y_min, fixed_y_max,
                         use_gender_range_val,
                         M_min_val, M_max_val, F_min_val, F_max_val,
-                        is_synthesis_save, is_spline_syntheis_save):
+                        is_synthesis_save, is_spline_syntheis_save,
+                        is_only_alignment):
             try:
                 if not tsv_file:
                     return gr.update(), gr.update(), "", "❌ 오류: TSV/CSV 파일이 선택되지 않았습니다."
@@ -285,7 +292,8 @@ def create_gradio_interface():
                     "fixed_y_min": validate_and_convert(fixed_y_min, default_config.get("fixed_y_min", 0), float, "Y axis minimum"),
                     "fixed_y_max": validate_and_convert(fixed_y_max, default_config.get("fixed_y_max", 600), float, "Y axis maximum"),
                     "is_synthesis_save": is_synthesis_save,
-                    "is_spline_syntheis_save": is_spline_syntheis_save
+                    "is_spline_syntheis_save": is_spline_syntheis_save,
+                    "is_only_alignment": is_only_alignment,  # 기본값은 False로 설정
                 }
                 if use_gender_range_val:
                     config["min_pitch_male"] = float(M_min_val) if M_min_val else 75.0
@@ -330,7 +338,8 @@ def create_gradio_interface():
                 fixed_y_min, fixed_y_max,
                 use_gender_range,
                 M_min, M_max, F_min, F_max,
-                is_synthesis_save, is_spline_syntheis_save
+                is_synthesis_save, is_spline_syntheis_save,
+                is_only_alignment
             ],
             outputs=[start_button, stop_button, log_output, status_output]
         )

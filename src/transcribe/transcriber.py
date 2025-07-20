@@ -129,6 +129,7 @@ class IntonationTranscriber:
             "show_spline": False,
             "is_synthesis_save": False,
             "is_spline_syntheis_save": False,
+            "is_only_alignment": False,
             "fixed_y_min": 0,
             "fixed_y_max": 600,
             "momel_parameters": "30 60 750 1.04 20 5 0.05",
@@ -1043,6 +1044,10 @@ class IntonationTranscriber:
         try:
             # 기본 전사 및 TextGrid 생성
             self.create_textgrid()
+            if self.settings['is_only_alignment']:
+                self.save_textgrid()
+                logger.info("정렬만 수행하고 종료합니다.")
+                return
             self.run_momel_based_labels()
             self.add_tcog_tier()
 
@@ -1067,7 +1072,7 @@ class IntonationTranscriber:
             logger.error(traceback.format_exc())
             return
 
-def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib/momel/momel_linux", ):
+def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib/momel/momel_linux"):
     """
     TSV 파일을 읽어 전체 파일 목록에 대해 MFA 배치 정렬을 먼저 수행하고,
     각 정렬 결과를 IntonationTranscriber에 전달하여 후속 처리를 진행합니다.
@@ -1120,6 +1125,7 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
     aligner = MFAAligner()
     try:
         grid_dict = aligner.align_batch(pairs, njobs=aligner.njobs)
+        
     except Exception as e:
         logger.error(f"MFA 배치 정렬 실패: {e}")
         logger.error(traceback.format_exc())
@@ -1164,7 +1170,7 @@ if __name__ == '__main__':
     parser.add_argument("tsv_file", type=str, nargs='?', default="tests/samples/input.tsv",
                         help="입력 TSV 파일 경로 (wavfile_path와 text 컬럼 포함)")
     parser.add_argument("output_dir", type=str, nargs='?', default='out',
-                        help="출력 TextGrid 파일들이 저장될 디렉토리 경로")
+                        help="출력 TextGrid 파일들이 저장될 디렉토리 경로, out경로에 입력 대상 wav 파일이 있어야 합니다.")
 
     args = parser.parse_args()
 
