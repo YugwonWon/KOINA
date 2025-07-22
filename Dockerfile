@@ -13,6 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 ########################
 # ca-certificates 를 먼저 깔고 update-ca-certificates 실행
 RUN apt-get update && \
+    apt-get install -y sox libsox-fmt-all && \
     apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg2 && \
     update-ca-certificates && \

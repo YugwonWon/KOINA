@@ -72,7 +72,7 @@ class MFAAligner:
                 self.model,                 # ③ ACOUSTIC_MODEL_PATH
                 out,                        # ④ OUTPUT_DIRECTORY
                 "-j", str(njobs),           # 이하 옵션
-                "--clean", "--quiet"
+                "--clean"
             ]
             if single_spk:
                 cmd += ["--single_speaker", "--no_fmllr"]
