@@ -48,4 +48,9 @@ function get_tag() {
 
 _tag=$(get_tag "$1")
 echo "$_tag"
-DOCKER_BUILDKIT=1 docker buildx build --platform linux/amd64 -t linky1584/koina:"$_tag" . --load
+
+docker buildx build \
+  --platform linux/amd64 \
+  --build-arg MF_ARCH=x86_64 \
+  -t linky1584/koina:$_tag \
+  . --load
