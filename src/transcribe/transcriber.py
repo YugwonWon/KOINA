@@ -27,14 +27,9 @@ from utils.file_ops import collect_wav_files, detect_delimiter
 from transcribe.aligner import MFAAligner, tg_to_alignment
 from pathlib import Path
 # 자식 로거 설정
-logger = main_logger.getChild('transcriber')
+logger = logging.getLogger('KOINA.transcriber')
 
-if not logger.handlers:
-    stream_handler = logging.StreamHandler()
-    logger.addHandler(stream_handler)
-logger.handlers[0].flush()
-
-logger.info("transcriber 시작!")
+logger.info("KOINA Start!")
 
 class IntonationTranscriber:
     """
@@ -159,11 +154,11 @@ class IntonationTranscriber:
         """
         강제 정렬 수행
         """
-        logger.info(f"강제 정렬을 시작합니다... (파일: {self.wav_file})")
+        logger.info(f"[aligner] 강제 정렬을 시작합니다... (파일: {self.wav_file})")
         self.alignment = self.aligner.align(self.wav_file, self.transcript)
         if not self.alignment:
-            raise ValueError(f"강제 정렬에 실패했습니다. (파일: {self.wav_file})")
-        logger.info(f"강제 정렬이 완료되었습니다. (파일: {self.wav_file})")
+            raise ValueError(f"[aligner] 강제 정렬에 실패했습니다. (파일: {self.wav_file})")
+        logger.info(f"[aligner] 강제 정렬이 완료되었습니다. (파일: {self.wav_file})")
         # alignment 내용 출력 (디버깅 용도)
         logger.debug(f"Alignment 결과: {json.dumps(self.alignment, indent=4, ensure_ascii=False)}")
 
@@ -1077,7 +1072,7 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
     TSV 파일을 읽어 전체 파일 목록에 대해 MFA 배치 정렬을 먼저 수행하고,
     각 정렬 결과를 IntonationTranscriber에 전달하여 후속 처리를 진행합니다.
     """
-    logger.info(f"입력 파일을 처리합니다: {tsv_file}")
+    logger.info(f"[file] 입력 파일을 처리합니다: {tsv_file}")
     os.makedirs(output_dir, exist_ok=True)
 
     # WAV 파일 목록을 준비합니다.
@@ -1092,7 +1087,7 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
             reader = csv.DictReader(f, delimiter=delimiter)
             for row in reader:
                 if stop_flag.is_set():
-                    logger.info("처리 중지 요청이 감지되었습니다. 작업을 중단합니다.")
+                    logger.info("[front] 처리 중지 요청이 감지되었습니다. 작업을 중단합니다.")
                     return
                 wav_file_name = row.get("filename", "").strip()
                 transcript = row.get("text", "")
@@ -1115,11 +1110,11 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
                     "transcript": transcript
                 })
     except Exception as e:
-        logger.error(f"파일을 준비하는 도중 에러 발생:\n{traceback.format_exc()}")
+        logger.error(f"[file] 파일을 준비하는 도중 에러 발생:\n{traceback.format_exc()}")
         return
 
     if not pairs:
-        logger.info("처리할 파일이 없습니다.")
+        logger.info("[file] 처리할 파일이 없습니다.")
         return
 
     aligner = MFAAligner()
@@ -1127,15 +1122,17 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
         grid_dict = aligner.align_batch(pairs, njobs=aligner.njobs)
         
     except Exception as e:
-        logger.error(f"MFA 배치 정렬 실패: {e}")
+        logger.error(f"[aligner] 배치 정렬 실패: {e}")
         logger.error(traceback.format_exc())
         return
 
     # 배치 정렬 결과(grid_dict)는 파일명(stem)을 key로 함
     for info in info_list:
-        if stop_flag.is_set():
-            logger.info("처리 중지 요청이 감지되었습니다. 작업을 중단합니다.")
-            return
+        # TQDM
+        with tqdm(total=100, desc=f"Processing {info['wav_path']}") as pbar:
+            if stop_flag.is_set():
+                logger.info("처리 중지 요청이 감지되었습니다. 작업을 중단합니다.")
+                return
         wav_path = Path(info["wav_path"]).expanduser().resolve()
         base     = wav_path.stem
         output_textgrid = info["output_textgrid"]
@@ -1152,11 +1149,11 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
         # MFAAligner에서 얻은 TextGrid 정렬 결과를 주입
         transcriber.alignment = tg_to_alignment(tg, info["transcript"])
 
-        logger.info(f"처리 중: {wav_path}")
+        logger.info(f"[run] 처리 중: {wav_path}")
         try:
             transcriber.run()
         except Exception as e:
-            logger.error(f"error 건너뜀: {wav_path}")
+            logger.error(f"[run] 오류 건너뜀: {wav_path}")
             logger.error(traceback.format_exc())
             continue
 

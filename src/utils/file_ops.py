@@ -1,6 +1,7 @@
 import os
+import logging
 from utils.logger import main_logger
-logger = main_logger.getChild('file_ops')
+logger = logging.getLogger('KOINA.file_ops')
 
 def collect_wav_files(base_dir: str):
     """
@@ -24,4 +25,4 @@ def detect_delimiter(file_path: str):
     elif file_path.endswith(".csv"):
         return ','
     else:
-        raise ValueError("지원하지 않는 파일 형식(확장자)입니다. TSV 또는 CSV 파일만 가능합니다.")
+        raise ValueError(f"{file_path}: 지원하지 않는 파일 형식(확장자)입니다. CSV(TSV) 파일만 가능합니다.")

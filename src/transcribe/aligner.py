@@ -1,5 +1,7 @@
 # src/transcribe/aligner.py
 from __future__ import annotations
+import logging
+import traceback
 from pathlib import Path
 import subprocess, tempfile, uuid, re
 import soundfile as sf
@@ -7,7 +9,7 @@ from textgrid import TextGrid
 from utils.logger import main_logger
 from utils.ipa2kr import ipa2kr
 
-logger = main_logger.getChild('aligner')
+logger = logging.getLogger('KOINA.aligner')
 PCM_ARGS = ['-ar', '16000', '-ac', '1', '-sample_fmt', 's16']
 
 __all__ = ["MFAAligner"]
@@ -28,7 +30,7 @@ class MFAAligner:
         with "start", "end", and "text" keys for each aligned segment.
     """
 
-    def __init__(self, dict_path: str = "korean_mfa", model: str = "korean_mfa", njobs: int = 8):
+    def __init__(self, dict_path: str = "korean_mfa", model: str = "korean_mfa", njobs: int = 4):
         self.dict_path = dict_path
         self.model = model
         self.njobs = njobs
@@ -39,7 +41,7 @@ class MFAAligner:
             with sf.SoundFile(src) as _:
                 dst.symlink_to(src)       # 통과 → 심볼릭 링크 유지
         except Exception:
-            logger.warning(f"wav 파일 libsndfile 오류, [convert] {src.name} -> PCM 16 kHz")
+            logger.warning(f"[aligner] wav 파일 libsndfile 오류, [convert] {src.name} -> PCM 16 kHz")
             cmd = ['ffmpeg', '-y', '-i', str(src), *PCM_ARGS, str(dst)]
             subprocess.run(cmd, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, check=True)
@@ -64,23 +66,29 @@ class MFAAligner:
                 dst = corpus / src.name          # 이름 충돌 주의!
                 self._safe_wav(src, dst)         # ← NEW
                 (dst.with_suffix(".lab")).write_text(txt, 'utf-8')
-
+            logger.info(f"[aligner] {len(pairs)}개의 파일을 준비했습니다.")
+            logger.info(f"[aligner] MFA 배치 정렬을 시작합니다... (njobs={njobs}, single_spk={single_spk})")
             cmd = [
-                "mfa", "align",
-                corpus,                     # ① CORPUS_DIRECTORY
-                self.dict_path,             # ② DICTIONARY_PATH
-                self.model,                 # ③ ACOUSTIC_MODEL_PATH
-                out,                        # ④ OUTPUT_DIRECTORY
-                "-j", str(njobs),           # 이하 옵션
-                "--clean"
+                "mfa", "align", str(corpus), self.dict_path, self.model, str(out),
+                "-j", str(njobs), "--clean",
+                "--verbose", "--disable_tqdm"          # ← 진행 단계 텍스트 출력
             ]
             if single_spk:
                 cmd += ["--single_speaker", "--no_fmllr"]
 
-            try:
-                subprocess.run(list(map(str, cmd)), check=True)
-            except subprocess.CalledProcessError as e:
-                raise RuntimeError(f"MFA 배치 정렬 실패: {e}") from None
+            logger.info("[aligner] MFA command: %s", " ".join(map(str, cmd)))
+
+            # ───── subprocess.run → Popen 스트리밍 ─────
+            proc = subprocess.Popen(
+                cmd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1
+            )
+            with proc.stdout:                             # 한 줄씩 읽어서 바로 로거에
+                for line in proc.stdout:
+                    logger.info("[MFA] %s", line.rstrip())
 
             # TextGrid 수집
             grids = {tg.stem: TextGrid.fromFile(str(tg)) for tg in out.rglob("*.TextGrid")}

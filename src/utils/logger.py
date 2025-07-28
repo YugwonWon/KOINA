@@ -6,7 +6,7 @@ def setup_logger(level=logging.INFO):
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
     # 부모 로거 설정
-    logger = logging.getLogger('IntonationTranscriber')
+    logger = logging.getLogger('KOINA')
 
     # 기존 핸들러 제거 (중복 방지)
     if logger.hasHandlers():
@@ -34,7 +34,7 @@ def setup_logger(level=logging.INFO):
     logger.setLevel(level)
 
     # 자식 로거 설정
-    child_loggers = ['transcriber', 'front']
+    child_loggers = ['transcriber', 'front', 'aligner', 'file_ops']
     for child_name in child_loggers:
         child_logger = logger.getChild(child_name)
         child_logger.propagate = True  # 부모 핸들러 상속 활성화

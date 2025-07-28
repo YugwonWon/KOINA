@@ -14,8 +14,6 @@ os.makedirs(os.path.dirname(LOG_FILE_PATH), exist_ok=True)
 # 로거 설정
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", filename=LOG_FILE_PATH, filemode='a')
 logger = logging.getLogger("front")
-if not logger.handlers:
-    logger.addHandler(logging.StreamHandler())
 
 class TranscriptionRunner:
     """억양 전사 프론트 메인 객체"""
