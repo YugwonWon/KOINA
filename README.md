@@ -59,8 +59,10 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
    | **3-B. Apple Silicon(M1/M2) 맥 / ARM 서버에서 실행** | QEMU 에뮬레이션으로 amd64 이미지를 구동합니다.<br /><br /><br />``docker run --rm --platform linux/amd64 -p 40080:40080 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest``<br /><br />**Tip ** : 첫 구동 시 다운로드·초기화 때문에 2-3분 정도 걸릴 수 있습니다. |
    | **4. 웹 UI 접속**                                    | 브라우저에 [http://localhost:40080](http://localhost:40080) 입력 → 파일 업로드·실행                                                                                                                                                                                                   |
    | **5. 컨테이너 종료**                                 | 터미널에서 `Ctrl + C` 또는 다른 쉘에서 `docker stop koina`                                                                                                                                                                                                                        |
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/20dce17c-3b1f-40cb-954c-e8a26bf68dc2" width="1237" height="643" alt="Image">
+</p>
 
-   `<img src="https://github.com/user-attachments/assets/5887a465-1946-46f5-9ed8-2d0251ac2d16" width="1397"></p>`
 2. **csv(tsv)파일 입력**
 
    - 아래는 CSV/TSV 파일 예시입니다. 각 열(컬럼)은 반드시 `wav_filename`, `sex`, `text` 순서를 지켜야 하며, CSV의 경우 쉼표로 구분하고, TSV의 경우 탭으로 구분하는 것만 다릅니다.
@@ -74,11 +76,11 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
 
    ```
 
+---
 ## 3. Python 로컬 환경에서 직접 실행하기 (Linux, Conda 권장)
 
 아래에서는 `./src/transcribe/transcriber.py` 스크립트를 중심으로, Python 환경에서 KOINA 억양 전사 모듈을 실행하는 방법을 소개합니다.
 
----
 
 1. **사전 준비**
 
