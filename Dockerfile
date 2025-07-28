@@ -3,7 +3,7 @@
 ########################
 # 공통 변수
 ARG MFA_ROOT_DIR=/opt/mfa_models
-ARG MF_ARCH=arm64
+ARG MF_ARCH=x86_64
 ARG MF_VER=25.3.0-3
 
 FROM ubuntu:22.04
@@ -32,6 +32,13 @@ RUN apt-get update && \
     update-ca-certificates && \
     apt-get install -y --no-install-recommends \
         tzdata ffmpeg libsndfile1 fontconfig fonts-nanum && \
+    rm -rf /var/lib/apt/lists/*
+
+# ── i386 라이브러리 설치 ──
+RUN dpkg --add-architecture i386 && \
+    apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+    libsndfile1:i386 libavcodec-extra:i386 && \
     rm -rf /var/lib/apt/lists/*
 
 ########################
