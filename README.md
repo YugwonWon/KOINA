@@ -49,38 +49,19 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
 
 ## 2. Docker 환경에서의 사용 방법
 
-KOINA는 공식 Docker 이미지를 통해 간편하게 실행할 수 있습니다. 로컬 환경에서 별도로 구축해야 할 의존성 없이, Docker 컨테이너 실행만으로 웹 인터페이스에 접근할 수 있습니다.
+1. KOINA는 **공식 Docker 이미지**를 통해 별도 의존성 설치 없이 바로 실행할 수 있습니다. 로컬 PC·서버 어디서든 동일한 절차로 웹 UI([http://localhost:40080](http://localhost:40080))에 접근할 수 있습니다.
 
-1. **도커 설치**
+   | 단계                                                       | 명령어 / 설명                                                                                                                                                                                                                                                                         |
+   | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | **1. Docker Desktop / Docker Engine 설치**           | [https://docs.docker.com/get-docker/](https://docs.docker.com/get-docker/)                                                                                                                                                                                                               |
+   | **2. 이미지 받기**                                   | ``docker pull linky1584/koina:latest``                                                                                                                                                                                                                                                |
+   | **3-A. Intel/AMD PC에서 실행**                       | ``docker run --rm \\\n  -p 40080:40080 \\\n  -v /your/audio/path:/koina/out \\\n  --name koina linky1584/koina:latest``                                                                                                                                                               |
+   | **3-B. Apple Silicon(M1/M2) 맥 / ARM 서버에서 실행** | QEMU 에뮬레이션으로 amd64 이미지를 구동합니다.<br /><br /><br />``docker run --rm --platform linux/amd64 -p 40080:40080 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest``<br /><br />**Tip ** : 첫 구동 시 다운로드·초기화 때문에 2-3분 정도 걸릴 수 있습니다. |
+   | **4. 웹 UI 접속**                                    | 브라우저에 [http://localhost:40080](http://localhost:40080) 입력 → 파일 업로드·실행                                                                                                                                                                                                   |
+   | **5. 컨테이너 종료**                                 | 터미널에서 `Ctrl + C` 또는 다른 쉘에서 `docker stop koina`                                                                                                                                                                                                                        |
 
-   - 로컬 컴퓨터에 Docker를 먼저 설치합니다. (운영체제별 설치 방법은 [Docker Docs](https://docs.docker.com/get-docker/) 참고)
-2. **이미지 받기 (pull)**
-
-   ```bash
-   docker pull linky1584/koina:latest
-
-   ```
-3. **도커 실행**
-
-   - 아래 명령어(CMD)는 사용자가 로컬에 있는 오디오 파일들이 위치한 폴더 경로를 `/your/audio/path` 부분에 넣어 실행하는 예시입니다.
-
-   ```
-   docker run --rm -p 40080:40080 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest
-
-   ```
-4. **웹 인터페이스 실행**
-
-   - 도커를 실행했다면, 인터넷 창을 열고 아래 주소를 입력해서 클라이언트를 실행합니다.
-   - 실행되기까지 몇 분 정도 소요될 수 있습니다.
-
-   ```
-   http://localhost:40080
-   ```
-
-   <p align="center">
-     <img src="https://github.com/user-attachments/assets/5887a465-1946-46f5-9ed8-2d0251ac2d16" width="1397">
-   </p>
-5. **csv(tsv)파일 입력**
+   `<img src="https://github.com/user-attachments/assets/5887a465-1946-46f5-9ed8-2d0251ac2d16" width="1397"></p>`
+2. **csv(tsv)파일 입력**
 
    - 아래는 CSV/TSV 파일 예시입니다. 각 열(컬럼)은 반드시 `wav_filename`, `sex`, `text` 순서를 지켜야 하며, CSV의 경우 쉼표로 구분하고, TSV의 경우 탭으로 구분하는 것만 다릅니다.
 
@@ -93,7 +74,7 @@ KOINA는 공식 Docker 이미지를 통해 간편하게 실행할 수 있습니�
 
    ```
 
-## 3. Python 환경에서의 사용 방법
+## 3. Python 로컬 환경에서 직접 실행하기 (Linux, Conda 권장)
 
 아래에서는 `./src/transcribe/transcriber.py` 스크립트를 중심으로, Python 환경에서 KOINA 억양 전사 모듈을 실행하는 방법을 소개합니다.
 
@@ -106,33 +87,44 @@ KOINA는 공식 Docker 이미지를 통해 간편하게 실행할 수 있습니�
    ```bash
    git clone https://github.com/YugwonWon/KOINA.git
    ```
-2. **가상환경(venv) 생성 및 라이브러리 설치**
+2. Miniforge/Anaconda 설치 (한 번만)
 
-   - 연구 환경이나 서버별로 파이썬 라이브러리가 상이할 수 있으므로, 가능한 한 독립적인 가상환경을 마련하는 편이 좋습니다. 다음과 같은 절차로 venv를 생성하고 필요한 라이브러리를 설치할 수 있습니다:
+   - 설치 가이드는 https://docs.conda.io/projects/miniconda/en/latest/ 참조
+   - Windows PowerShell·macOS Terminal·Linux bash 모두 동일합니다.
+3. Conda 가상환경 생성 & 패키지 설치
 
-   ```bash
-   # 가상환경(venv) 생성
-   python -m venv venv
-
-   # 가상환경 활성화 (Windows, Mac/Linux 명령어 상이)
-   # 예: Mac/Linux
-   source venv/bin/activate
-
-   # 예: Windows
-   .\venv\Scripts\activate
-
-   # requirements 설치
-   pip install -r requirements.txt
    ```
-3. **스크립트 실행**
+   # 3-1) 새 환경 생성
+   conda create -y -n koina python=3.10
+   conda activate koina
 
-   - transcriber.py에는 억양 전사를 위한 핵심 로직이 포함되어 있으며, 터미널(또는 커맨드라인)에서 argument를 지정해 실행할 수 있습니다. 예시 명령어는 다음과 같습니다:
+   # 3-2) 채널 설정
+   conda config --add channels conda-forge
+   conda config --set channel_priority strict
 
-   ```bash
+   # 3-3) 주요 패키지 + MFA 3.2.1 설치
+   mamba install -y \
+     montreal-forced-aligner=3.2.1 \
+     numpy pandas scipy matplotlib tqdm \
+     textgrid pydub ffmpeg-python
+
+   # 3-4) 한국어 토크나이저 및 부가 패키지
+   pip install python-mecab-ko jamo \
+               gradio soundfile==0.12.1 praat-parselmouth
+
+   # 3-5) MFA 한국어 모델 다운로드
+   mfa model download dictionary korean_mfa
+   mfa model download acoustic   korean_mfa
+   ```
+4. 스크립트 실행
+
+- transcriber.py에는 억양 전사를 위한 핵심 로직이 포함되어 있으며, 터미널(또는 커맨드라인)에서 argument를 지정해 실행할 수 있습니다. 예시 명령어는 다음과 같습니다:
+
+```bash
    python ./src/transcribe/transcriber.py \
     data/input.tsv \
     out \
-   ```
+```
 
 ## 4. 이슈 보고 및 피드백
 
