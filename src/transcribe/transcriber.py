@@ -22,7 +22,6 @@ from parselmouth.praat import call
 
 from textgrid import TextGrid, IntervalTier, PointTier
 
-from utils.logger import main_logger
 from utils.file_ops import collect_wav_files, detect_delimiter
 from transcribe.aligner import MFAAligner, tg_to_alignment
 from pathlib import Path
@@ -35,15 +34,8 @@ class IntonationTranscriber:
     """
     억양 자동 전사 클래스
     """
-    _aligner = None
     _fontprop = None
     _settings = None
-
-    @classmethod
-    def get_aligner(cls):
-        if cls._aligner is None:
-            cls._aligner = MFAAligner()
-        return cls._aligner
 
     @classmethod
     def get_fontprop(cls):
@@ -125,6 +117,8 @@ class IntonationTranscriber:
             "is_synthesis_save": False,
             "is_spline_syntheis_save": False,
             "is_only_alignment": False,
+            "alignment_njobs": 4,
+            "alignment_single_spk": False,
             "fixed_y_min": 0,
             "fixed_y_max": 600,
             "momel_parameters": "30 60 750 1.04 20 5 0.05",
@@ -150,17 +144,17 @@ class IntonationTranscriber:
         self.fontprop = self.get_fontprop()
         self.alignment = None
 
-    def perform_alignment(self):
-        """
-        강제 정렬 수행
-        """
-        logger.info(f"[aligner] 강제 정렬을 시작합니다... (파일: {self.wav_file})")
-        self.alignment = self.aligner.align(self.wav_file, self.transcript)
-        if not self.alignment:
-            raise ValueError(f"[aligner] 강제 정렬에 실패했습니다. (파일: {self.wav_file})")
-        logger.info(f"[aligner] 강제 정렬이 완료되었습니다. (파일: {self.wav_file})")
-        # alignment 내용 출력 (디버깅 용도)
-        logger.debug(f"Alignment 결과: {json.dumps(self.alignment, indent=4, ensure_ascii=False)}")
+    # def perform_alignment(self):
+    #     """
+    #     강제 정렬 수행
+    #     """
+    #     logger.info(f"[aligner] 강제 정렬을 시작합니다... (파일: {self.wav_file})")
+    #     self.alignment = self.aligner.align(self.wav_file, self.transcript)
+    #     if not self.alignment:
+    #         raise ValueError(f"[aligner] 강제 정렬에 실패했습니다. (파일: {self.wav_file})")
+    #     logger.info(f"[aligner] 강제 정렬이 완료되었습니다. (파일: {self.wav_file})")
+    #     # alignment 내용 출력 (디버깅 용도)
+    #     logger.debug(f"Alignment 결과: {json.dumps(self.alignment, indent=4, ensure_ascii=False)}")
 
     def extract_pitch(self, sex):
         """
@@ -475,7 +469,7 @@ class IntonationTranscriber:
             tcog_tier = PointTier(name="TCoG", minTime=0, maxTime=self.duration)
             tcog_tier.add(tcog, "TCoG")
             self.textgrid.append(tcog_tier)
-            logger.info(f"TCoG 티어를 추가했습니다: {tcog}초")
+            logger.info(f"TCoG 티어를 추가했습니다: {tcog:.2f}")
         else:
             logger.warning("TCoG 계산에 실패했습니다.")
 
@@ -1127,35 +1121,38 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
         return
 
     # 배치 정렬 결과(grid_dict)는 파일명(stem)을 key로 함
-    for info in info_list:
-        # TQDM
-        with tqdm(total=100, desc=f"Processing {info['wav_path']}") as pbar:
+    with logging_redirect_tqdm():
+        for info in tqdm(info_list,
+                        desc="Transcribing Intonation",
+                        unit="file",
+                        leave=False):
             if stop_flag.is_set():
                 logger.info("처리 중지 요청이 감지되었습니다. 작업을 중단합니다.")
-                return
-        wav_path = Path(info["wav_path"]).expanduser().resolve()
-        base     = wav_path.stem
-        output_textgrid = info["output_textgrid"]
-        sex = info["sex"]
-        tg       = grid_dict.get(base)
-        # IntonationTranscriber 생성 시 미리 정렬 결과를 전달합니다.
-        transcriber = IntonationTranscriber(
-            wav_file=str(wav_path),
-            transcript=info["transcript"],
-            sex=sex,
-            output_textgrid=output_textgrid,
-            momel_path=momel_path
-        )
-        # MFAAligner에서 얻은 TextGrid 정렬 결과를 주입
-        transcriber.alignment = tg_to_alignment(tg, info["transcript"])
+                break
+            
+            wav_path = Path(info["wav_path"]).expanduser().resolve()
+            base     = wav_path.stem
+            output_textgrid = info["output_textgrid"]
+            sex = info["sex"]
+            tg       = grid_dict.get(base)
+            # IntonationTranscriber 생성 시 미리 정렬 결과를 전달합니다.
+            transcriber = IntonationTranscriber(
+                wav_file=str(wav_path),
+                transcript=info["transcript"],
+                sex=sex,
+                output_textgrid=output_textgrid,
+                momel_path=momel_path
+            )
+            # MFAAligner에서 얻은 TextGrid 정렬 결과를 주입
+            transcriber.alignment = tg_to_alignment(tg, info["transcript"])
 
-        logger.info(f"[run] 처리 중: {wav_path}")
-        try:
-            transcriber.run()
-        except Exception as e:
-            logger.error(f"[run] 오류 건너뜀: {wav_path}")
-            logger.error(traceback.format_exc())
-            continue
+            logger.info(f"[run] 처리 중: {wav_path}")
+            try:
+                transcriber.run()
+            except Exception as e:
+                logger.error(f"[run] 오류 건너뜀: {wav_path}")
+                logger.error(traceback.format_exc())
+                continue
 
     logger.info("모든 파일 처리가 완료되었습니다.")
 

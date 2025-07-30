@@ -154,7 +154,9 @@ def create_gradio_interface():
         "is_spline_syntheis_save": False,
         "is_only_alignment": False,
         "fixed_y_min": 0,
-        "fixed_y_max": 600
+        "fixed_y_max": 600,
+        "alignment_njobs": 4,
+        "alignment_single_spk": False,
     }
 
     with gr.Blocks(css=".custom-box {margin-top: 20px;}") as main:
@@ -183,7 +185,6 @@ def create_gradio_interface():
         gr.Markdown("### 🎛️ Pitch Parameters")  # 섹션 제목 추가
 
         with gr.Row():
-            # 좌측 4개 배치
             with gr.Column():
                 min_pitch = gr.Textbox(label="Min Pitch", placeholder="기본값: 75")
                 time_step = gr.Textbox(label="Pitch Step", placeholder="기본값: 0.01")
@@ -191,7 +192,6 @@ def create_gradio_interface():
                 octave_cost = gr.Textbox(label="Octave Cost", placeholder="기본값: 0.05")
                 very_accurate = gr.Textbox(label="Very Accurate", placeholder="기본값: 0")
 
-            # 우측 5개 배치
             with gr.Column():
                 max_pitch = gr.Textbox(label="Max Pitch", placeholder="기본값: 600")
                 number_of_candidates = gr.Textbox(label="Number of Candidates", placeholder="기본값: 15")
@@ -218,6 +218,12 @@ def create_gradio_interface():
             outputs=[M_min, M_max, F_min, F_max],
         )
         
+        # 정규화 옵션 선택
+        gr.Markdown("### 📐 Normalization Option")
+        with gr.Row():
+            fixed_y_min = gr.Textbox(label="Y축 최솟값 (Y-axis Min)", placeholder="기본값: 0")
+            fixed_y_max = gr.Textbox(label="Y축 최댓값 (Y-axis Max)", placeholder="기본값: 600")
+            
         # 합성 음성 저장 여부 선택(boolean)
         gr.Markdown("### 📂 Output Options")
         # 체크박스로 합성 음성 저장 여부 선택
@@ -233,18 +239,18 @@ def create_gradio_interface():
                 label = "연결 곡선(spline) 윤곽 합성 음성 저장",
                 value = default_config["is_spline_syntheis_save"],
                 interactive = True)
-            is_only_alignment = gr.Checkbox(
-                label = "음성-텍스트 시간 정렬만 수행",
-                value = default_config["is_only_alignment"],
-                interactive = True
-            )
-            
-        # 정규화 옵션 선택
-        gr.Markdown("### 📐 Normalization Option")
-        with gr.Row():
-            fixed_y_min = gr.Textbox(label="Y축 최솟값 (Y-axis Min)", placeholder="기본값: 0")
-            fixed_y_max = gr.Textbox(label="Y축 최댓값 (Y-axis Max)", placeholder="기본값: 600")
         
+        # Align Options
+        gr.Markdown("### 📏 Alignment Options")
+        # 음성-텍스트 정렬 옵션
+        with gr.Row():
+            is_only_alignment = gr.Checkbox(
+                label="음성-텍스트 시간 정렬만 수행(억양 분석을 하지 않음)",
+                value=default_config["is_only_alignment"],
+                interactive=True
+            )
+            single_spk = gr.Checkbox(label="단일 화자 모드(전체 오디오를 녹음한 화자 수가 한 명인 경우)", value=default_config["alignment_single_spk"], interactive=True)
+            njobs = gr.Textbox(label="병렬 처리 작업 수(동시에 사용할 CPU 코어/프로세스 개수)", placeholder="기본값: 4", interactive=True)
         
         # 버튼 및 상태 출력
         start_button = gr.Button("작업 시작")
@@ -267,7 +273,8 @@ def create_gradio_interface():
                         use_gender_range_val,
                         M_min_val, M_max_val, F_min_val, F_max_val,
                         is_synthesis_save, is_spline_syntheis_save,
-                        is_only_alignment):
+                        is_only_alignment,
+                        njobs, single_spk):
             try:
                 if not tsv_file:
                     return gr.update(), gr.update(), "", "❌ 오류: TSV/CSV 파일이 선택되지 않았습니다."
@@ -292,6 +299,8 @@ def create_gradio_interface():
                     "is_synthesis_save": is_synthesis_save,
                     "is_spline_syntheis_save": is_spline_syntheis_save,
                     "is_only_alignment": is_only_alignment,  # 기본값은 False로 설정
+                    "alignment_njobs": validate_and_convert(njobs, default_config["alignment_njobs"], int, "병렬 처리 작업 수"),
+                    "alignment_single_spk": validate_and_convert(single_spk, default_config["alignment_single_spk"], bool, "단일 화자 모드"),
                 }
                 if use_gender_range_val:
                     config["min_pitch_male"] = float(M_min_val) if M_min_val else 75.0
@@ -337,7 +346,8 @@ def create_gradio_interface():
                 use_gender_range,
                 M_min, M_max, F_min, F_max,
                 is_synthesis_save, is_spline_syntheis_save,
-                is_only_alignment
+                is_only_alignment,
+                njobs, single_spk
             ],
             outputs=[start_button, stop_button, log_output, status_output]
         )

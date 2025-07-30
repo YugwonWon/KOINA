@@ -1,12 +1,11 @@
 # src/transcribe/aligner.py
 from __future__ import annotations
 import logging
-import traceback
+import json
 from pathlib import Path
-import subprocess, tempfile, uuid, re
+import subprocess, tempfile, uuid
 import soundfile as sf
 from textgrid import TextGrid
-from utils.logger import main_logger
 from utils.ipa2kr import ipa2kr
 
 logger = logging.getLogger('KOINA.aligner')
@@ -25,16 +24,30 @@ class MFAAligner:
         - dict_path: Path to the pronunciation dictionary file (.dict).
         - model: Name or path of the acoustic model to use.
         - njobs: Number of parallel jobs to run for alignment.
+        - single_spk: If True, assumes a single speaker in the audio.
     Returns:
         A dictionary with keys "words" and "phonemes", each containing a list of dictionaries
         with "start", "end", and "text" keys for each aligned segment.
     """
 
-    def __init__(self, dict_path: str = "korean_mfa", model: str = "korean_mfa", njobs: int = 4):
+    def __init__(self, dict_path: str = "korean_mfa", model: str = "korean_mfa"):
         self.dict_path = dict_path
         self.model = model
-        self.njobs = njobs
-
+        self.config = None
+        self.njobs = 4
+        self.single_spk = False
+        
+        # load config from file
+        self._load_config()
+        
+    def _load_config(self, config_path="out/config.json"):
+        """Load configuration from a file"""
+        with open(config_path, "r") as f:
+            self.config = json.load(f)
+        self.njobs = self.config.get("alignment_njobs", 4)
+        self.single_spk = self.config.get("alignment_single_spk", False)
+    
+    
     def _safe_wav(self, src: Path, dst: Path):
         """libsndfile 로 열리지 않는 WAV 는 ffmpeg 로 변환"""
         try:
@@ -46,13 +59,11 @@ class MFAAligner:
             subprocess.run(cmd, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, check=True)
 
-    def align_batch(self, pairs, *, njobs=8, single_spk=True):
+    def align_batch(self, pairs):
         """
         Aligns a batch of audio files with their transcriptions.
         Args:
             pairs (list of tuples): Each tuple contains (wav_path, transcription_text).
-            njobs (int): Number of parallel jobs to run.
-            single_spk (bool): If True, assumes a single speaker for all files.
         Returns:
             dict: A dictionary with aligned words and phonemes for each audio file.
         """
@@ -67,13 +78,13 @@ class MFAAligner:
                 self._safe_wav(src, dst)         # ← NEW
                 (dst.with_suffix(".lab")).write_text(txt, 'utf-8')
             logger.info(f"[aligner] {len(pairs)}개의 파일을 준비했습니다.")
-            logger.info(f"[aligner] MFA 배치 정렬을 시작합니다... (njobs={njobs}, single_spk={single_spk})")
+            logger.info(f"[aligner] MFA 배치 정렬을 시작합니다... (njobs={self.njobs}, single_spk={self.single_spk})")
             cmd = [
                 "mfa", "align", str(corpus), self.dict_path, self.model, str(out),
-                "-j", str(njobs), "--clean",
+                "-j", str(self.njobs), "--clean",
                 "--verbose", "--disable_tqdm"          # ← 진행 단계 텍스트 출력
             ]
-            if single_spk:
+            if self.single_spk:
                 cmd += ["--single_speaker", "--no_fmllr"]
 
             logger.info("[aligner] MFA command: %s", " ".join(map(str, cmd)))
