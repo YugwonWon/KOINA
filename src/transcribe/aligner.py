@@ -8,7 +8,9 @@ import soundfile as sf
 from textgrid import TextGrid
 from utils.ipa2kr import ipa2kr
 
-logger = logging.getLogger('KOINA.aligner')
+from utils.logger import main_logger
+logger = main_logger.getChild('aligner')
+
 PCM_ARGS = ['-ar', '16000', '-ac', '1', '-sample_fmt', 's16']
 
 __all__ = ["MFAAligner"]
@@ -77,8 +79,8 @@ class MFAAligner:
                 dst = corpus / src.name          # 이름 충돌 주의!
                 self._safe_wav(src, dst)         # ← NEW
                 (dst.with_suffix(".lab")).write_text(txt, 'utf-8')
-            logger.info(f"[aligner] {len(pairs)}개의 파일을 준비했습니다.")
-            logger.info(f"[aligner] MFA 배치 정렬을 시작합니다... (njobs={self.njobs}, single_spk={self.single_spk})")
+            logger.info(f"[ALIGNER] {len(pairs)}개의 파일을 준비했습니다.")
+            logger.info(f"[ALIGNER] MFA 배치 정렬을 시작합니다... (njobs={self.njobs}, single_spk={self.single_spk})")
             cmd = [
                 "mfa", "align", str(corpus), self.dict_path, self.model, str(out),
                 "-j", str(self.njobs), "--clean",
@@ -87,7 +89,7 @@ class MFAAligner:
             if self.single_spk:
                 cmd += ["--single_speaker", "--no_fmllr"]
 
-            logger.info("[aligner] MFA command: %s", " ".join(map(str, cmd)))
+            logger.info("[ALIGNER] MFA command: %s", " ".join(map(str, cmd)))
 
             # ───── subprocess.run → Popen 스트리밍 ─────
             proc = subprocess.Popen(
@@ -99,7 +101,7 @@ class MFAAligner:
             )
             with proc.stdout:                             # 한 줄씩 읽어서 바로 로거에
                 for line in proc.stdout:
-                    logger.info("[MFA] %s", line.rstrip())
+                    logger.info("[ALIGNER] %s", line.rstrip())
 
             # TextGrid 수집
             grids = {tg.stem: TextGrid.fromFile(str(tg)) for tg in out.rglob("*.TextGrid")}

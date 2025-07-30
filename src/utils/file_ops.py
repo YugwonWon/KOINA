@@ -1,7 +1,8 @@
 import os
-import logging
+
+# 로거 설정
 from utils.logger import main_logger
-logger = logging.getLogger('KOINA.file_ops')
+logger = main_logger.getChild('file_ops')
 
 def collect_wav_files(base_dir: str):
     """

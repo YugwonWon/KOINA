@@ -26,9 +26,9 @@ from utils.file_ops import collect_wav_files, detect_delimiter
 from transcribe.aligner import MFAAligner, tg_to_alignment
 from pathlib import Path
 # 자식 로거 설정
-logger = logging.getLogger('KOINA.transcriber')
-
-logger.info("KOINA Start!")
+from utils.logger import main_logger
+logger = main_logger.getChild('transcriber')
+logger.info("[RUN]KOINA Start!")
 
 class IntonationTranscriber:
     """
@@ -173,10 +173,10 @@ class IntonationTranscriber:
             local_min_pitch = self.settings["min_pitch_female"]
             local_max_pitch = self.settings["max_pitch_female"]
 
-        logger.info(
-            f"[extract_pitch] sex={sex}, "
-            f"min_pitch={local_min_pitch}, max_pitch={local_max_pitch}, file={self.wav_file}"
-        )
+        # logger.info(
+        #     f"[extract_pitch] sex={sex}, "
+        #     f"min_pitch={local_min_pitch}, max_pitch={local_max_pitch}, file={self.wav_file}"
+        # )
 
         pitch = call(
             self.sound, "To Pitch (ac)",
@@ -197,7 +197,7 @@ class IntonationTranscriber:
         """
         Momel을 이용하여 Points 티어를 생성 (time_step 고정 유지)
         """
-        logger.info(f"Momel을 사용하여 Points 티어를 생성합니다... (파일: {self.wav_file})")
+        logger.info(f"[RUN] Momel을 사용하여 Points 티어를 생성합니다... (파일: {self.wav_file})")
         points_tier = PointTier(name="Points", minTime=0, maxTime=self.duration)
         self.textgrid.append(points_tier)
 
@@ -342,7 +342,7 @@ class IntonationTranscriber:
             os.remove(momel_path)
 
         logger.info(
-            f"Momel Points 생성 완료. f0 범위: {temp_f0_min:.2f} ~ {temp_f0_max:.2f}, 파일 = {self.wav_file}"
+            f"[RUN]Momel Points 생성 완료. f0 범위: {temp_f0_min:.2f} ~ {temp_f0_max:.2f}, 파일 = {self.wav_file}"
         )
 
     def run_momel(self, momel_cmd: str, momel_file: str, f0_file: str):
@@ -357,15 +357,15 @@ class IntonationTranscriber:
 
             command = f'{momel_cmd} {self.settings["momel_parameters"]} <"{f0_path}" >"{momel_out}"'
             subprocess.run(command, shell=True, check=True, env=env)
-            logger.info(f'Momel 실행 완료: {momel_file}')
+            logger.info(f'[RUN] Momel 실행 완료: {momel_file}')
         except subprocess.CalledProcessError as e:
-            logger.error(f'Momel 실행 중 오류 발생: {e}')
+            logger.error(f'[RUN] Momel 실행 중 오류 발생: {e}')
 
     def create_textgrid(self):
         """
         TextGrid 생성 및 티어 추가
         """
-        logger.info(f"TextGrid를 생성합니다... (파일: {self.wav_file})")
+        logger.info(f"[RUN]TextGrid를 생성합니다... (파일: {self.wav_file})")
 
         # utterance 티어 생성
         utterance_tier = IntervalTier(name="utterance", minTime=0, maxTime=self.duration)
@@ -425,9 +425,9 @@ class IntonationTranscriber:
         """
         TextGrid 저장
         """
-        logger.info(f"TextGrid를 {self.output_textgrid}에 저장합니다...")
+        logger.info(f"[RUN] TextGrid를 {self.output_textgrid}에 저장합니다...")
         self.textgrid.write(self.output_textgrid)
-        logger.info(f"TextGrid가 성공적으로 저장되었습니다. (파일: {self.output_textgrid})")
+        logger.info(f"[RUN] TextGrid가 성공적으로 저장되었습니다. (파일: {self.output_textgrid})")
         # # WAV 파일을 TextGrid 위치로 복사
         # wav_output_path = self.output_textgrid.replace('.TextGrid', '.wav')
         # try:
@@ -469,9 +469,9 @@ class IntonationTranscriber:
             tcog_tier = PointTier(name="TCoG", minTime=0, maxTime=self.duration)
             tcog_tier.add(tcog, "TCoG")
             self.textgrid.append(tcog_tier)
-            logger.info(f"TCoG 티어를 추가했습니다: {tcog:.2f}")
+            logger.info(f"[RUN] TCoG 티어를 추가했습니다: {tcog:.2f}")
         else:
-            logger.warning("TCoG 계산에 실패했습니다.")
+            logger.warning("[RUN] TCoG 계산에 실패했습니다.")
 
     def add_percentage_points_tier(self, corrected_times, corrected_f0_values):
         """
@@ -484,7 +484,7 @@ class IntonationTranscriber:
             percentage_points_tier.add(percentage_time, f"{f0:.2f}")
 
         self.textgrid.append(percentage_points_tier)
-        logger.info("최종 조정된 Points(pct) 티어가 성공적으로 추가되었습니다.")
+        logger.info("[RUN] 최종 조정된 Points(pct) 티어가 성공적으로 추가되었습니다.")
 
     def simplify_pitch_points_by_slope(self, times, f0_values, slope_threshold=27):
         """
@@ -538,7 +538,7 @@ class IntonationTranscriber:
         call([pitch_tier, manipulation], "Replace pitch tier")
         manipulated_sound = call(manipulation, "Get resynthesis (overlap-add)")
         manipulated_sound.save(output_wav_path, 'WAV')
-        logger.info(f"변조된 pitch 음성을 {output_wav_path}에 저장했습니다.")
+        logger.info(f"[RUN] 변조된 pitch 음성을 {output_wav_path}에 저장했습니다.")
 
     def get_momel_pitch_points(self, points_tier):
         """
@@ -668,7 +668,7 @@ class IntonationTranscriber:
         plt.savefig(output_image_path, format="jpg", pil_kwargs={"quality": 85})  # JPEG로 저장 시 품질 설정
 
         plt.close()
-        logger.info(f"그래프가 저장되었습니다: {output_image_path}")
+        logger.info(f"[RUN] 그래프가 저장되었습니다: {output_image_path}")
 
     def plot_momel_pitch_points(self):
         """
@@ -701,7 +701,7 @@ class IntonationTranscriber:
         self.plot_graph_with_annotations(ax, times, f0_values, "Momel 음높이 포인트와 TextGrid 주석 (음높이 목표점 최소화)", "pitch target minimalized Momel Pitch Point")
         plt.savefig(output_path, format="jpg", pil_kwargs={"quality": 85})  # JPEG로 저장 시 품질 설정
         plt.close()
-        logger.info(f"단순화된 Momel 음높이 포인트 그래프가 저장되었습니다: {output_path}")
+        logger.info(f"[RUN] 단순화된 Momel 음높이 포인트 그래프가 저장되었습니다: {output_path}")
 
     def plot_doubling_halving_corrected_pitch_contour(self, times, f0_values, output_path):
         """
@@ -711,7 +711,7 @@ class IntonationTranscriber:
         self.plot_graph_with_annotations(ax, times, f0_values, "배증/반감 제거된 음높이 포인트", "Corrected Pitch Points")
         plt.savefig(output_path, format="jpg", pil_kwargs={"quality": 85})
         plt.close()
-        logger.info(f"Doubling/Halving 제거된 음높이 포인트 그래프가 저장되었습니다: {output_path}")
+        logger.info(f"[RUN] Doubling/Halving 제거된 음높이 포인트 그래프가 저장되었습니다: {output_path}")
 
     def plot_spline_contour(self, times, f0_values, output_path, corrected_times, corrected_f0_values):
         """
@@ -723,7 +723,7 @@ class IntonationTranscriber:
         self.plot_graph_with_annotations(ax, times, f0_values, "삼차 스플라인 음높이 윤곽", "Spline Pitch Contour", show_spline=self.settings['show_spline'], corrected_times=corrected_times, corrected_f0_values=corrected_f0_values)
         plt.savefig(output_path, format="jpg", pil_kwargs={"quality": 85})
         plt.close()
-        logger.info(f"스플라인 음높이 포인트 그래프가 저장되었습니다: {output_path}")
+        logger.info(f"[RUN] 스플라인 음높이 포인트 그래프가 저장되었습니다: {output_path}")
         
     def plot_percentage_pitch_contour(self, times, f0_values, output_image_path, y_fixed_range=600):
         """
@@ -755,7 +755,7 @@ class IntonationTranscriber:
         ax.legend(loc="upper right")
         plt.savefig(output_image_path, format="jpg", pil_kwargs={"quality": 85})
         plt.close()
-        logger.info(f"퍼센테이지 기반 음높이 그래프가 저장되었습니다: {output_image_path}")
+        logger.info(f"[RUN] 백분율 기반 음높이 그래프가 저장되었습니다: {output_image_path}")
 
     def adjust_bottom_margin(self, fig, ax, times, f0_values):
         """
@@ -819,7 +819,7 @@ class IntonationTranscriber:
         # 변조된 음성을 재합성
         manipulated_sound = call(manipulation, "Get resynthesis (overlap-add)")
         manipulated_sound.save(output_wav_path, 'WAV')
-        logger.info(f"스플라인 기반으로 수정된 음성을 {output_wav_path}에 저장했습니다.")
+        logger.info(f"[RUN] 스플라인 기반으로 수정된 음성을 {output_wav_path}에 저장했습니다.")
 
     def apply_cubic_spline(self, simplified_times, simplified_f0_values, num_points=100):
         """
@@ -1027,7 +1027,7 @@ class IntonationTranscriber:
             os.path.exists(output_momel_pitch_contour_minimalized) and
             os.path.exists(modified_minimalization_wav_path) and 
             os.path.exists(corrected_image_path)):
-            logger.info(f"모든 출력 파일이 이미 존재합니다. 건너뜁니다: {self.output_textgrid}")
+            logger.info(f"[RUN] 모든 출력 파일이 이미 존재합니다. 건너뜁니다: {self.output_textgrid}")
             return
 
         try:
@@ -1035,7 +1035,7 @@ class IntonationTranscriber:
             self.create_textgrid()
             if self.settings['is_only_alignment']:
                 self.save_textgrid()
-                logger.info("정렬만 수행하고 종료합니다.")
+                logger.info("[RUN] 정렬만 수행하고 종료합니다.")
                 return
             self.run_momel_based_labels()
             self.add_tcog_tier()
@@ -1066,7 +1066,7 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
     TSV 파일을 읽어 전체 파일 목록에 대해 MFA 배치 정렬을 먼저 수행하고,
     각 정렬 결과를 IntonationTranscriber에 전달하여 후속 처리를 진행합니다.
     """
-    logger.info(f"[file] 입력 파일을 처리합니다: {tsv_file}")
+    logger.info(f"[FILE] 입력 파일을 처리합니다: {tsv_file}")
     os.makedirs(output_dir, exist_ok=True)
 
     # WAV 파일 목록을 준비합니다.
@@ -1081,15 +1081,15 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
             reader = csv.DictReader(f, delimiter=delimiter)
             for row in reader:
                 if stop_flag.is_set():
-                    logger.info("[front] 처리 중지 요청이 감지되었습니다. 작업을 중단합니다.")
+                    logger.info("[RUN] 처리 중지 요청이 감지되었습니다. 작업을 중단합니다.")
                     return
                 wav_file_name = row.get("filename", "").strip()
                 transcript = row.get("text", "")
                 sex = row.get("sex", "")
-                logger.info(wav_file_name)
                 if wav_file_name not in wav_dict:
-                    logger.warning(f"WAV 파일을 찾을 수 없습니다: {wav_file_name}")
+                    logger.warning(f"[FILE] WAV 파일을 찾을 수 없습니다: {wav_file_name}")
                     continue
+                logger.info(f"[FILE] 처리 중: {wav_file_name}")
                 wav_file_path = wav_dict[wav_file_name]
                 base_name = os.path.splitext(os.path.basename(wav_file_path))[0]
                 # 출력 디렉토리 생성
@@ -1104,11 +1104,11 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
                     "transcript": transcript
                 })
     except Exception as e:
-        logger.error(f"[file] 파일을 준비하는 도중 에러 발생:\n{traceback.format_exc()}")
+        logger.error(f"[FILE] 파일을 준비하는 도중 에러 발생:\n{traceback.format_exc()}")
         return
 
     if not pairs:
-        logger.info("[file] 처리할 파일이 없습니다.")
+        logger.info("[FILE] 처리할 파일이 없습니다.")
         return
 
     aligner = MFAAligner()
@@ -1127,7 +1127,7 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
                         unit="file",
                         leave=False):
             if stop_flag.is_set():
-                logger.info("처리 중지 요청이 감지되었습니다. 작업을 중단합니다.")
+                logger.info("[RUN] 처리 중지 요청이 감지되었습니다. 작업을 중단합니다.")
                 break
             
             wav_path = Path(info["wav_path"]).expanduser().resolve()
@@ -1146,15 +1146,15 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
             # MFAAligner에서 얻은 TextGrid 정렬 결과를 주입
             transcriber.alignment = tg_to_alignment(tg, info["transcript"])
 
-            logger.info(f"[run] 처리 중: {wav_path}")
+            logger.info(f"[RUN] 처리 중: {wav_path}")
             try:
                 transcriber.run()
             except Exception as e:
-                logger.error(f"[run] 오류 건너뜀: {wav_path}")
+                logger.error(f"[RUN] 오류 건너뜀: {wav_path}")
                 logger.error(traceback.format_exc())
                 continue
 
-    logger.info("모든 파일 처리가 완료되었습니다.")
+    logger.info("[RUN] 모든 파일 처리가 완료되었습니다.")
 
 if __name__ == '__main__':
     import argparse

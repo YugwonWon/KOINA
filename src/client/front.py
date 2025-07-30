@@ -1,7 +1,7 @@
 import os
 import json
-import logging
 import time
+from logging.handlers import RotatingFileHandler
 from threading import Thread, Event
 import gradio as gr
 from transcribe.transcriber import process_files
@@ -12,8 +12,8 @@ CONFIG_FILE = "out/config.json"  # Config 파일 경로
 os.makedirs(os.path.dirname(LOG_FILE_PATH), exist_ok=True)
 
 # 로거 설정
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", filename=LOG_FILE_PATH, filemode='a')
-logger = logging.getLogger("front")
+from utils.logger import main_logger
+logger = main_logger.getChild('front')
 
 class TranscriptionRunner:
     """억양 전사 프론트 메인 객체"""
@@ -34,11 +34,11 @@ class TranscriptionRunner:
 
         def run():
             try:
-                logger.info("작업 시작!")
+                logger.info("[FRONT] 작업 시작!")
                 process_files(tsv_file, output_dir, self.stop_flag)
-                logger.info("작업 완료!")
+                logger.info("[FRONT] 작업 완료!")
             except Exception as e:
-                logger.error(f"오류 발생: {e}")
+                logger.error(f"[FRONT] 오류 발생: {e}")
             finally:
                 self.running = False
 
@@ -51,16 +51,16 @@ class TranscriptionRunner:
         if not self.running:
             return "진행 중인 작업이 없습니다."
         self.stop_flag.set()
-        logger.info("작업 중단 요청이 접수되었습니다.")
+        logger.info("[FRONT] 작업 중단 요청이 접수되었습니다.")
         return "작업 중단 요청이 접수되었습니다."
 
     def start_log_stream(self):
         """로그 파일 실시간 스트리밍"""
         if self.running:
-            logger.info("이미 로그 스트리밍이 실행 중입니다.")
+            logger.info("[FRONT] 이미 로그 스트리밍이 실행 중입니다.")
             return
         self.running = True
-        logger.info("로그 스트리밍을 시작합니다.")
+        logger.info("[FRONT] 로그 스트리밍을 시작합니다.")
         def stream_logs():
             try:
                 with open(LOG_FILE_PATH, "r", encoding="utf-8") as log_file:
@@ -74,7 +74,7 @@ class TranscriptionRunner:
                         else:
                             time.sleep(0.1)
             except Exception as e:
-                logger.error(f"로그 스트리밍 중 오류 발생: {e}")
+                logger.error(f"[FRONT] 로그 스트리밍 중 오류 발생: {e}")
 
         log_thread = Thread(target=stream_logs, daemon=True)
         log_thread.start()
@@ -99,14 +99,14 @@ def save_config(config):
     os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=4)
-    logger.info(f"설정이 {CONFIG_FILE}에 저장되었습니다.")
+    logger.info(f"[FRONT] 설정이 {CONFIG_FILE}에 저장되었습니다.")
 
 def load_config():
     """Config 파일 로드"""
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    logger.warning("Config 파일이 없습니다. 기본값을 사용합니다.")
+    logger.warning("[FRONT] Config 파일이 없습니다. 기본값을 사용합니다.")
     return {}
 
 def toggle_gender_range(use_gender_range_val):
@@ -317,7 +317,11 @@ def create_gradio_interface():
                 return gr.update(), gr.update(), f"❌ 오류: {e}" , ""
 
         def stop_transcription():
+            logger.info("STOP requested – rolling log file.")
             transcription_runner.stop_transcription()
+            for h in logger.handlers:
+                if isinstance(h, RotatingFileHandler):
+                    h.doRollover()
             return gr.update(visible=True), gr.update(visible=False), "작업이 중단되었습니다.", ""
         
         status_output = gr.Textbox(
