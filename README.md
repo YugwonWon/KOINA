@@ -49,23 +49,23 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
 
 ## 2. Docker 환경에서의 사용 방법
 
-1. KOINA는 **공식 Docker 이미지**를 통해 별도 의존성 설치 없이 바로 실행할 수 있습니다. 로컬 PC·서버 어디서든 동일한 절차로 웹 UI([http://localhost:40080](http://localhost:40080))에 접근할 수 있습니다.
-
-   | 단계                                                       | 명령어 / 설명                                                                                                                                                                                                                                                                         |
+1. KOINA는 **공식 Docker 이미지**를 통해 별도 의존성 설치 없이 바로 실행할 수 있습니다. 로컬 PC·서버 어디서든 동일한 절차로 웹 UI([http://localhost:40080](http://localhost:40080))에 접근할 수 있습니다.| 단계                                                       | 명령어 / 설명                                                                                                                                                                                                                                                                         |
    | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
    | **1. Docker Desktop / Docker Engine 설치**           | [https://docs.docker.com/get-docker/](https://docs.docker.com/get-docker/)                                                                                                                                                                                                               |
    | **2. 이미지 받기**                                   | ``docker pull linky1584/koina:latest``                                                                                                                                                                                                                                                |
-   | **3-A. Intel/AMD PC에서 실행**                       | ``docker run --rm \\\n  -p 40080:40080 \\\n  -v /your/audio/path:/koina/out \\\n  --name koina linky1584/koina:latest``                                                                                                                                                               |
-   | **3-B. Apple Silicon(M1/M2) 맥 / ARM 서버에서 실행** | QEMU 에뮬레이션으로 amd64 이미지를 구동합니다.<br /><br /><br />``docker run --rm --platform linux/amd64 -p 40080:40080 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest``<br /><br />**Tip ** : 첫 구동 시 다운로드·초기화 때문에 2-3분 정도 걸릴 수 있습니다. |
-   | **4. 웹 UI 접속**                                    | 브라우저에 [http://localhost:40080](http://localhost:40080) 입력 → 파일 업로드·실행                                                                                                                                                                                                   |
+   | **3-A. Intel/AMD PC에서 실행**                       | ``docker run --rm -p 40080:40080 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest``                                                                                                                                                               |
+   | **3-B. Apple Silicon(M1/M2) 맥 / ARM 서버에서 실행** | QEMU 에뮬레이션으로 amd64 이미지를 구동합니다.`<br /><br />``<br />```docker run --rm --platform linux/amd64 -p 40080:40080 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest```<br /><br />`**Tip ** : 첫 구동 시 다운로드·초기화 때문에 2-3분 정도 걸릴 수 있습니다. |
+   | **4. 웹 UI 접속**                                    | 브라우저에 [http://localhost:40080](http://localhost:40080) 입력 → 파일 업로드·실행                                                                                                                                                                                                     |
    | **5. 컨테이너 종료**                                 | 터미널에서 `Ctrl + C` 또는 다른 쉘에서 `docker stop koina`                                                                                                                                                                                                                        |
+2. 정상 접속 화면
+
 <p align="center">
   <img src="https://github.com/user-attachments/assets/20dce17c-3b1f-40cb-954c-e8a26bf68dc2" width="1237" height="643" alt="Image">
 </p>
 
-2. **csv(tsv)파일 입력**
+3. **csv(tsv)파일 입력**
 
-   - 아래는 CSV/TSV 파일 예시입니다. 각 열(컬럼)은 반드시 `wav_filename`, `sex`, `text` 순서를 지켜야 하며, CSV의 경우 쉼표로 구분하고, TSV의 경우 탭으로 구분하는 것만 다릅니다.
+   - 아래는 CSV/TSV 파일 예시입니다. 각 열(column)은 반드시 `wav_filename`, `sex`, `text` 순서를 지켜야 하며, CSV의 경우 쉼표로 구분하고, TSV의 경우 탭으로 구분하는 것만 다릅니다.
 
    #### TSV 예시
 
@@ -77,10 +77,10 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
    ```
 
 ---
+
 ## 3. Python 로컬 환경에서 직접 실행하기 (Linux, Conda 권장)
 
 아래에서는 `./src/transcribe/transcriber.py` 스크립트를 중심으로, Python 환경에서 KOINA 억양 전사 모듈을 실행하는 방법을 소개합니다.
-
 
 1. **사전 준비**
 
@@ -128,6 +128,8 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
     out \
 ```
 
+---
+
 ## 4. 이슈 보고 및 피드백
 
 프로젝트는 아직 완성 단계가 아니며, 다양한 실제 음성 분석 현장에서 얻은 피드백을 통해 개선될 여지가 많습니다.
@@ -154,7 +156,7 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
   author = {Won, YuGwon},
   title = {KOINA: Korean Intonation Annotator},
   year = {2025},
-  version = {v0.5.0},
+  version = {v1.0.0},
   doi = {\url{https://doi.org/10.5281/zenodo.15034862}},
   journal = {Github repository},
   note = {\url{https://github.com/YugwonWon/KOINA}}
