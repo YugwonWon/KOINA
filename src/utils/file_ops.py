@@ -14,7 +14,7 @@ def collect_wav_files(base_dir: str):
             if file.lower().endswith(".wav"):
                 file_name = os.path.basename(file)
                 wav_dict[file_name] = os.path.join(root, file)
-    logger.info(f"WAV 파일 {len(wav_dict)}개를 검색했습니다.")
+    logger.info(f"[FILE] 사용자가 지정한 폴더에서 WAV 파일 총 {len(wav_dict)}개를 검색했습니다.")
     return wav_dict
 
 def detect_delimiter(file_path: str):

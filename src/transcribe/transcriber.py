@@ -28,7 +28,7 @@ from pathlib import Path
 # 자식 로거 설정
 from utils.logger import main_logger
 logger = main_logger.getChild('transcriber')
-logger.info("[RUN]KOINA Start!")
+logger.info("[RUN] KOINA Start!")
 
 class IntonationTranscriber:
     """
@@ -1113,10 +1113,10 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
 
     aligner = MFAAligner()
     try:
-        grid_dict = aligner.align_batch(pairs, njobs=aligner.njobs)
+        grid_dict = aligner.align_batch(pairs)
         
     except Exception as e:
-        logger.error(f"[aligner] 배치 정렬 실패: {e}")
+        logger.error(f"[ALIGNER] 배치 정렬 실패: {e}")
         logger.error(traceback.format_exc())
         return
 

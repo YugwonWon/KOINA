@@ -56,7 +56,7 @@ class MFAAligner:
             with sf.SoundFile(src) as _:
                 dst.symlink_to(src)       # 통과 → 심볼릭 링크 유지
         except Exception:
-            logger.warning(f"[aligner] wav 파일 libsndfile 오류, [convert] {src.name} -> PCM 16 kHz")
+            logger.warning(f"[ALIGNER] wav 파일 libsndfile 오류, [convert] {src.name} -> PCM 16 kHz")
             cmd = ['ffmpeg', '-y', '-i', str(src), *PCM_ARGS, str(dst)]
             subprocess.run(cmd, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, check=True)
