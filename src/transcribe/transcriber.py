@@ -341,7 +341,7 @@ class IntonationTranscriber:
             os.remove(momel_path)
 
         logger.info(
-            f"[RUN]Momel Points 생성 완료. f0 범위: {temp_f0_min:.2f} ~ {temp_f0_max:.2f}, 파일 = {self.wav_file}"
+            f"[RUN] Momel Points 생성 완료. f0 범위: {temp_f0_min:.2f} ~ {temp_f0_max:.2f}, 파일 = {self.wav_file}"
         )
 
     def run_momel(self, momel_cmd: str, momel_file: str, f0_file: str):
@@ -364,7 +364,7 @@ class IntonationTranscriber:
         """
         TextGrid 생성 및 티어 추가
         """
-        logger.info(f"[RUN]TextGrid를 생성합니다... (파일: {self.wav_file})")
+        logger.info(f"[RUN] TextGrid를 생성합니다... (파일: {self.wav_file})")
 
         # utterance 티어 생성
         utterance_tier = IntervalTier(name="utterance", minTime=0, maxTime=self.duration)

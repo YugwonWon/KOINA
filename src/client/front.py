@@ -12,7 +12,7 @@ CONFIG_FILE = "out/config.json"  # Config 파일 경로
 os.makedirs(os.path.dirname(LOG_FILE_PATH), exist_ok=True)
 
 # 로거 설정
-from utils.logger import main_logger
+from utils.logger import main_logger, force_rollover
 logger = main_logger.getChild('front')
 
 class TranscriptionRunner:
@@ -20,7 +20,8 @@ class TranscriptionRunner:
 
     def __init__(self):
         self.thread = None
-        self.running = False
+        self.trans_running  = False   # 전사 작업 상태
+        self.stream_running = False   # 로그 스트림 상태
         self.stop_flag = Event()
         self.log_lines = []
 
@@ -62,17 +63,28 @@ class TranscriptionRunner:
         self.running = True
         logger.info("[FRONT] 로그 스트리밍을 시작합니다.")
         def stream_logs():
+            path = LOG_FILE_PATH
             try:
-                with open(LOG_FILE_PATH, "r", encoding="utf-8") as log_file:
-                    log_file.seek(0, os.SEEK_END)  # 파일 끝으로 이동
-                    while self.running:
-                        line = log_file.readline()
+                with open(path, "r", encoding="utf-8") as f:
+                    f.seek(0, os.SEEK_END)
+                    inode = os.fstat(f.fileno()).st_ino
+                    while self.stream_running:
+                        line = f.readline()
                         if line:
                             self.log_lines.append(line.strip())
                             if len(self.log_lines) > 100:
                                 self.log_lines.pop(0)
                         else:
                             time.sleep(0.1)
+                            # 롤오버되었는지 확인
+                            if not os.path.exists(path):
+                                continue  # 드물지만 파일 잠시 사라질 수 있음
+                            new_inode = os.stat(path).st_ino
+                            if new_inode != inode:
+                                # 파일 핸들 교체
+                                f.close()
+                                f = open(path, "r", encoding="utf-8")
+                                inode = new_inode
             except Exception as e:
                 logger.error(f"[FRONT] 로그 스트리밍 중 오류 발생: {e}")
 
@@ -318,10 +330,10 @@ def create_gradio_interface():
 
         def stop_transcription():
             logger.info("STOP requested – rolling log file.")
+            transcription_runner.stop_log_stream()   # ①
+            force_rollover(logger)                   # ②
+            transcription_runner.start_log_stream()  # ③
             transcription_runner.stop_transcription()
-            for h in logger.handlers:
-                if isinstance(h, RotatingFileHandler):
-                    h.doRollover()
             return gr.update(visible=True), gr.update(visible=False), "작업이 중단되었습니다.", ""
         
         status_output = gr.Textbox(

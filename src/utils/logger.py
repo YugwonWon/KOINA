@@ -42,6 +42,13 @@ def setup_logger(level=logging.INFO):
 
     return logger
 
+def force_rollover(logger):
+    lgr = logger
+    while lgr:                       # 자식 → 부모 → … → root
+        for h in lgr.handlers:
+            if isinstance(h, RotatingFileHandler):
+                h.doRollover()
+        lgr = lgr.parent
 
 # 로거 초기화
 main_logger = setup_logger()
