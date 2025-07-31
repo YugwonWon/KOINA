@@ -140,7 +140,6 @@ class IntonationTranscriber:
 
         # cls 변수
         self.settings = self.get_settings(config_path, momel_path)
-        self.aligner = self.get_aligner()
         self.fontprop = self.get_fontprop()
         self.alignment = None
 
