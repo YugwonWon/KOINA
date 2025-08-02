@@ -57,28 +57,54 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
 | **2. 이미지 받기**                                   | ``docker pull linky1584/koina:latest``                                                                                                                                                                                                                                          |
 | **3-A. Intel/AMD PC에서 실행**                       | ``docker run --rm -p 40080:40080 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest``                                                                                                                                                                           |
 | **3-B. Apple Silicon(M1/M2) 맥 / ARM 서버에서 실행** | QEMU 에뮬레이션으로 amd64 이미지를 구동합니다.<br /><br />`docker run --rm --platform linux/amd64 -p 40080:40080 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest`<br /><br />**Tip ** : 첫 구동 시 다운로드·초기화 때문에 2-3분 정도 걸릴 수 있습니다. |
-| **4. 웹 UI 접속**                                    | 브라우저에 [http://localhost:40080](http://localhost:40080) 입력 → 파일 업로드·실행                                                                                                                                                                                             |
+| **4. 웹 UI 접속**                                    | 브라우저에[http://localhost:40080](http://localhost:40080) 입력 → 파일 업로드·실행                                                                                                                                                                                               |
 | **5. 컨테이너 종료**                                 | 터미널에서 `Ctrl + C` 또는 다른 쉘에서 `docker stop koina`                                                                                                                                                                                                                  |
 
 2. 정상 접속 화면
-
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/20dce17c-3b1f-40cb-954c-e8a26bf68dc2" width="1237" height="643" alt="Image">
 </p>
 
-3. **csv(tsv)파일 입력**
+3-1. **csv(tsv)파일 입력**
 
-   - 아래는 CSV/TSV 파일 예시입니다. 각 열(column)은 반드시 `wav_filename`, `sex`, `text` 순서를 지켜야 하며, CSV의 경우 쉼표로 구분하고, TSV의 경우 탭으로 구분하는 것만 다릅니다.
+- 아래는 CSV/TSV 파일 예시입니다. 각 열(column)은 반드시 `wav_filename`, `sex`, `text` 를 포함해야, CSV의 경우 쉼표로 구분하고, TSV의 경우 탭으로 구분하는 것만 다릅니다.
 
-   #### TSV 예시
+#### TSV 예시
 
-
-   ```tsv
+```tsv
    wav_filename    sex    text
    SDRW2200000001.1.1.1.wav    M    어 여기서 학교 얘기가 나와서
 
-   ```
+```
+
+3-2. 음성-텍스트 정렬 코퍼스 폴더 구조 및 화자 설정
+
+KOINA는 `out/` 디렉토리를 기준으로 WAV 파일을 읽어들이고, MFA 배치 정렬 시 **폴더별 화자**를 인식해 병렬 처리(job)를 자동 분배합니다. 하지만 별도 화자 구분을 가정하지 않고 주제, 대화별 폴더를 구성하여도 상관 없습니다.
+
+- 단일 폴더에 모든 WAV 배치
+
+```text
+  out/
+    a.wav
+    b.wav
+    c.wav
+```
+
+- 화자별 하위 폴더 분리 예시
+
+```text
+out/
+  speaker1/
+    a.wav
+    b.wav
+  speaker2/
+    c.wav
+    d.wav
+  speaker3/
+    e.wav
+```
+
 
 ---
 
