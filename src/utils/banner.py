@@ -22,6 +22,6 @@ SPERM_WHALE_BANNER = r"""
           ,#:$!=:#**;@$;!*#;!~--:*$:#*#;#*#:$:                                  
            =#~ ;#, =#  #$  $= ,=: ~#~ ~#: -##                               
                                                         
-             Welcome aboard!  KOINA ready!
+             Welcome aboard!  KOINA is ready!
              
 """
