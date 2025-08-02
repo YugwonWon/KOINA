@@ -68,14 +68,13 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
 
 3-1. **csv(tsv)파일 입력**
 
-- 아래는 CSV/TSV 파일 예시입니다. 각 열(column)은 반드시 `wav_filename`, `sex`, `text` 를 포함해야, CSV의 경우 쉼표로 구분하고, TSV의 경우 탭으로 구분하는 것만 다릅니다.
+- 아래는 CSV/TSV 파일 예시입니다. 각 열(column)의 이름은 반드시 `filename`, `sex`, `text` 를 포함해야, CSV의 경우 쉼표로 구분하고, TSV의 경우 탭으로 구분하는 것만 다릅니다.
 
 #### TSV 예시
 
 ```tsv
-   wav_filename    sex    text
+   filename    sex    text
    SDRW2200000001.1.1.1.wav    M    어 여기서 학교 얘기가 나와서
-
 ```
 
 3-2. 음성-텍스트 정렬 코퍼스 폴더 구조 및 화자 설정
@@ -195,7 +194,7 @@ out/
 
 ---
 
-🐳 Found it useful? Sponsor us or buy me a coffee!
+🐳 Found it useful? Sponsor us or buy me a coffee! 
 
 <p align="left">
    <a href="https://github.com/sponsors/YugwonWon" target="_blank">
