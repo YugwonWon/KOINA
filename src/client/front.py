@@ -69,7 +69,7 @@ class TranscriptionRunner:
             logger.info("[FRONT] 이미 로그 스트리밍이 실행 중입니다.")
             return
         self.stream_running = True
-        logger.info("[FRONT] 새 로그 스트리밍을 시작합니다.")
+        logger.info("[FRONT] 새 로그 스트리밍을 시작합니다. http://localhost:40080 에서 확인하세요.")
         def stream_logs():
             path = LOG_FILE_PATH
             try:

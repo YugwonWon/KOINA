@@ -1,4 +1,4 @@
-WHALE_BANNER = r"""                                                  
+SPERM_WHALE_BANNER = r"""                                                  
                                        ..=*,      ..                            
          -------------,-;             !---.#.    .-.                            
         ,---------------$.           !----~*! -----.                            
@@ -22,5 +22,6 @@ WHALE_BANNER = r"""
           ,#:$!=:#**;@$;!*#;!~--:*$:#*#;#*#:$:                                  
            =#~ ;#, =#  #$  $= ,=: ~#~ ~#: -##                               
                                                         
-             Welcome aboard!  KOINA ready!\n
+             Welcome aboard!  KOINA ready!
+             
 """
