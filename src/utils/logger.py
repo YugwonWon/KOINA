@@ -1,7 +1,7 @@
 
 import logging, os
 from logging.handlers import RotatingFileHandler
-from utils.banner import WHALE_BANNER
+from utils.banner import SPERM_WHALE_BANNER
 
 def setup_logger(level=logging.INFO):
     formatter = logging.Formatter(
@@ -68,4 +68,4 @@ def force_rollover(logger):
 # 로거 초기화
 main_logger = setup_logger()
 logger = main_logger.getChild("banner")
-logger.info(WHALE_BANNER.strip("\n"))
+logger.info(SPERM_WHALE_BANNER.strip("\n"))
