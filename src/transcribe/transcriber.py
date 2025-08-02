@@ -6,10 +6,9 @@ import math
 import subprocess
 import traceback
 import numpy as np
-import logging
 
 from tqdm import tqdm
-from tqdm.contrib.logging import logging_redirect_tqdm
+from tqdm.contrib.logging import tqdm_logging_redirect
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -28,7 +27,6 @@ from pathlib import Path
 # 자식 로거 설정
 from utils.logger import main_logger
 logger = main_logger.getChild('transcriber')
-logger.info("[RUN] KOINA Start!")
 
 class IntonationTranscriber:
     """
@@ -196,7 +194,6 @@ class IntonationTranscriber:
         """
         Momel을 이용하여 Points 티어를 생성 (time_step 고정 유지)
         """
-        logger.info(f"[RUN] Momel을 사용하여 Points 티어를 생성합니다... (파일: {self.wav_file})")
         points_tier = PointTier(name="Points", minTime=0, maxTime=self.duration)
         self.textgrid.append(points_tier)
 
@@ -341,7 +338,7 @@ class IntonationTranscriber:
             os.remove(momel_path)
 
         logger.info(
-            f"[RUN] Momel Points 생성 완료. f0 범위: {temp_f0_min:.2f} ~ {temp_f0_max:.2f}, 파일 = {self.wav_file}"
+            f"[RUN] Momel 음높이 포인트 생성 완료: F0 범위: {temp_f0_min:.2f} ~ {temp_f0_max:.2f}, {self.wav_file}"
         )
 
     def run_momel(self, momel_cmd: str, momel_file: str, f0_file: str):
@@ -364,7 +361,7 @@ class IntonationTranscriber:
         """
         TextGrid 생성 및 티어 추가
         """
-        logger.info(f"[RUN] TextGrid를 생성합니다... (파일: {self.wav_file})")
+        logger.info(f"[RUN] TextGrid를 생성합니다...: {self.wav_file}")
 
         # utterance 티어 생성
         utterance_tier = IntervalTier(name="utterance", minTime=0, maxTime=self.duration)
@@ -424,9 +421,8 @@ class IntonationTranscriber:
         """
         TextGrid 저장
         """
-        logger.info(f"[RUN] TextGrid를 {self.output_textgrid}에 저장합니다...")
         self.textgrid.write(self.output_textgrid)
-        logger.info(f"[RUN] TextGrid가 성공적으로 저장되었습니다. (파일: {self.output_textgrid})")
+        logger.info(f"[RUN] TextGrid가 성공적으로 저장되었습니다: {self.output_textgrid}")
         # # WAV 파일을 TextGrid 위치로 복사
         # wav_output_path = self.output_textgrid.replace('.TextGrid', '.wav')
         # try:
@@ -483,7 +479,7 @@ class IntonationTranscriber:
             percentage_points_tier.add(percentage_time, f"{f0:.2f}")
 
         self.textgrid.append(percentage_points_tier)
-        logger.info("[RUN] 최종 조정된 Points(pct) 티어가 성공적으로 추가되었습니다.")
+        logger.info("[RUN] Points(pct) 티어가 추가되었습니다.")
 
     def simplify_pitch_points_by_slope(self, times, f0_values, slope_threshold=27):
         """
@@ -495,7 +491,7 @@ class IntonationTranscriber:
             slope_threshold (float): 기울기 차이 임계값.
 
         Returns:
-            list: 단순화된 시간과 f0 값 리스트.
+            list: F0 목표점 최소화 시간과 f0 값 리스트.
         """
         simplified_times = [times[0]]
         simplified_f0_values = [f0_values[0]]
@@ -525,7 +521,7 @@ class IntonationTranscriber:
 
     def synthesize_pitch_modified_wav(self, output_wav_path, times, f0_values):
         """
-        Momel의 Points 티어 또는 단순화된 음높이를 기반으로 pitch를 변조하여 새로운 WAV 파일로 저장합니다.
+        Momel의 Points 티어 또는 F0 목표점 최소화를 기반으로 pitch를 변조하여 새로운 WAV 파일로 저장합니다.
         """
         manipulation = call(self.sound, "To Manipulation", 0.01, 75, 600)
         pitch_tier = call(manipulation, "Extract pitch tier")
@@ -537,7 +533,7 @@ class IntonationTranscriber:
         call([pitch_tier, manipulation], "Replace pitch tier")
         manipulated_sound = call(manipulation, "Get resynthesis (overlap-add)")
         manipulated_sound.save(output_wav_path, 'WAV')
-        logger.info(f"[RUN] 변조된 pitch 음성을 {output_wav_path}에 저장했습니다.")
+        logger.info(f"[RUN] F0 목표점 최소화를 적용한 음성을 저장했습니다: {output_wav_path}")
 
     def get_momel_pitch_points(self, points_tier):
         """
@@ -667,7 +663,7 @@ class IntonationTranscriber:
         plt.savefig(output_image_path, format="jpg", pil_kwargs={"quality": 85})  # JPEG로 저장 시 품질 설정
 
         plt.close()
-        logger.info(f"[RUN] 그래프가 저장되었습니다: {output_image_path}")
+        logger.info(f"[RUN] 원시 음높이 그래프가 저장되었습니다: {output_image_path}")
 
     def plot_momel_pitch_points(self):
         """
@@ -694,13 +690,13 @@ class IntonationTranscriber:
 
     def plot_simplified_pitch_contour(self, times, f0_values, output_path):
         """
-        단순화된 음높이 포인트를 사용하여 Momel Pitch contour를 그려서 저장합니다.
+        F0 목표점 최소화 포인트를 사용하여 Momel Pitch contour를 그려서 저장합니다.
         """
         fig, ax = plt.subplots(figsize=(15, 5))
         self.plot_graph_with_annotations(ax, times, f0_values, "Momel 음높이 포인트와 TextGrid 주석 (음높이 목표점 최소화)", "pitch target minimalized Momel Pitch Point")
         plt.savefig(output_path, format="jpg", pil_kwargs={"quality": 85})  # JPEG로 저장 시 품질 설정
         plt.close()
-        logger.info(f"[RUN] 단순화된 Momel 음높이 포인트 그래프가 저장되었습니다: {output_path}")
+        logger.info(f"[RUN] F0 목표점 최소화 포인트 그래프가 저장되었습니다: {output_path}")
 
     def plot_doubling_halving_corrected_pitch_contour(self, times, f0_values, output_path):
         """
@@ -722,7 +718,7 @@ class IntonationTranscriber:
         self.plot_graph_with_annotations(ax, times, f0_values, "삼차 스플라인 음높이 윤곽", "Spline Pitch Contour", show_spline=self.settings['show_spline'], corrected_times=corrected_times, corrected_f0_values=corrected_f0_values)
         plt.savefig(output_path, format="jpg", pil_kwargs={"quality": 85})
         plt.close()
-        logger.info(f"[RUN] 스플라인 음높이 포인트 그래프가 저장되었습니다: {output_path}")
+        logger.info(f"[RUN] 삼차 스플라인 그래프가 저장되었습니다: {output_path}")
         
     def plot_percentage_pitch_contour(self, times, f0_values, output_image_path, y_fixed_range=600):
         """
@@ -818,15 +814,15 @@ class IntonationTranscriber:
         # 변조된 음성을 재합성
         manipulated_sound = call(manipulation, "Get resynthesis (overlap-add)")
         manipulated_sound.save(output_wav_path, 'WAV')
-        logger.info(f"[RUN] 스플라인 기반으로 수정된 음성을 {output_wav_path}에 저장했습니다.")
+        logger.info(f"[RUN] 삼차 스플라인 합성 음성을 저장했습니다: {output_wav_path}")
 
     def apply_cubic_spline(self, simplified_times, simplified_f0_values, num_points=100):
         """
-        단순화된 F0 포인트를 대상으로 3차 스플라인을 적용하여 값을 반환합니다.
+        F0 목표점 최소화 포인트를 대상으로 3차 스플라인을 적용하여 값을 반환합니다.
 
         Parameters:
-            simplified_times (list): 단순화된 F0 포인트의 시간 리스트.
-            simplified_f0_values (list): 단순화된 F0 포인트의 F0 값 리스트.
+            simplified_times (list): F0 목표점 최소화 포인트의 시간 리스트.
+            simplified_f0_values (list): F0 목표점 최소화 포인트의 F0 값 리스트.
             num_points (int): 스플라인 윤곽을 계산할 샘플 포인트 수.
 
         Returns:
@@ -847,13 +843,13 @@ class IntonationTranscriber:
                                      spline_image_path, spline_wav_path,
                                      percentage_image_path):
         """
-        Momel의 Points 티어를 기반으로 첫 번째 변조를 수행하고, 단순화된 음높이 포인트로 두 번째 변조 및 그래프를 생성합니다.
+        Momel의 Points 티어를 기반으로 첫 번째 변조를 수행하고, F0 목표점 최소화 포인트로 두 번째 변조 및 그래프를 생성합니다.
 
         Parameters:
             points_tier_name (str): 변조에 사용할 Momel의 Points 티어 이름.
             modified_wav_path (str): 첫 번째 변조된 음성의 출력 파일 경로.
             minimalized_wav_path (str): 단순화 후 두 번째 변조된 음성의 출력 파일 경로.
-            minimalized_image_path (str): 단순화된 음높이 포인트 그래프의 출력 이미지 파일 경로.
+            minimalized_image_path (str): F0 목표점 최소화 포인트 그래프의 출력 이미지 파일 경로.
             corrected_wav_path (str): Doubling/Halving 제거 후 음성의 출력 파일 경로.
             corrected_image_path (str): Doubling/Halving 제거 후 그래프의 출력 이미지 파일 경로.
         """
@@ -1026,7 +1022,7 @@ class IntonationTranscriber:
             os.path.exists(output_momel_pitch_contour_minimalized) and
             os.path.exists(modified_minimalization_wav_path) and 
             os.path.exists(corrected_image_path)):
-            logger.info(f"[RUN] 모든 출력 파일이 이미 존재합니다. 건너뜁니다: {self.output_textgrid}")
+            logger.info(f"[RUN] 모든 출력 파일이 이미 존재하여 건너뜁니다: {self.output_textgrid}")
             return
 
         try:
@@ -1060,12 +1056,12 @@ class IntonationTranscriber:
             logger.error(traceback.format_exc())
             return
 
-def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib/momel/momel_linux"):
+def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_path="src/lib/momel/momel_linux"):
     """
     TSV 파일을 읽어 전체 파일 목록에 대해 MFA 배치 정렬을 먼저 수행하고,
     각 정렬 결과를 IntonationTranscriber에 전달하여 후속 처리를 진행합니다.
     """
-    logger.info(f"[FILE] 입력 파일을 처리합니다: {tsv_file}")
+    logger.info(f"[FILE] 입력 파일을 처리합니다: {os.path.basename(tsv_file)}")
     os.makedirs(output_dir, exist_ok=True)
 
     # WAV 파일 목록을 준비합니다.
@@ -1080,7 +1076,7 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
             reader = csv.DictReader(f, delimiter=delimiter)
             for row in reader:
                 if stop_flag.is_set():
-                    logger.info("[RUN] 처리 중지 요청이 감지되었습니다. 작업을 중단합니다.")
+                    logger.info("[RUN] 처리 중지 요청이 감지되어 작업을 중단합니다")
                     return
                 wav_file_name = row.get("filename", "").strip()
                 transcript = row.get("text", "")
@@ -1088,7 +1084,6 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
                 if wav_file_name not in wav_dict:
                     logger.warning(f"[FILE] WAV 파일을 찾을 수 없습니다: {wav_file_name}")
                     continue
-                logger.info(f"[FILE] 처리 중: {wav_file_name}")
                 wav_file_path = wav_dict[wav_file_name]
                 base_name = os.path.splitext(os.path.basename(wav_file_path))[0]
                 # 출력 디렉토리 생성
@@ -1107,28 +1102,43 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
         return
 
     if not pairs:
-        logger.info("[FILE] 처리할 파일이 없습니다.")
+        logger.info("[FILE] 처리할 파일이 없습니다")
         return
 
     aligner = MFAAligner()
-    try:
-        grid_dict = aligner.align_batch(pairs)
+    
+    if runner is not None:
+        runner.current_aligner = aligner 
         
+    try:
+        grid_dict = aligner.align_batch(pairs, stop_flag=stop_flag)
     except Exception as e:
         logger.error(f"[ALIGNER] 배치 정렬 실패: {e}")
         logger.error(traceback.format_exc())
         return
-
-    # 배치 정렬 결과(grid_dict)는 파일명(stem)을 key로 함
-    with logging_redirect_tqdm():
-        for info in tqdm(info_list,
-                        desc="Transcribing Intonation",
-                        unit="file",
-                        leave=False):
-            if stop_flag.is_set():
-                logger.info("[RUN] 처리 중지 요청이 감지되었습니다. 작업을 중단합니다.")
-                break
+    finally:
+        # 작업이 끝났거나 예외가 나도 cleanup 작업을 수행합니다.
+        if runner is not None:
+            runner.current_aligner = None
             
+    
+    total = len(info_list)
+    LOG_EVERY = 5
+    # 배치 정렬 결과(grid_dict)는 파일명(stem)을 key로 함
+    with tqdm_logging_redirect(logger):
+        for idx, info in enumerate(
+                    tqdm(info_list, desc="Transcribing",
+                        unit="file", ascii=True,
+                        mininterval=1.0, dynamic_ncols=False),
+                    start=1):
+            
+            if stop_flag.is_set():
+                logger.info("[RUN] 처리 중지 요청이 감지되어 작업을 중단합니다")
+                break
+            if idx == 1 or idx % LOG_EVERY == 0 or idx == total:
+                pct = 100 * idx / total
+                logger.info(f"[PROGRESS] {idx}/{total} ({pct:5.1f} %)")
+                
             wav_path = Path(info["wav_path"]).expanduser().resolve()
             base     = wav_path.stem
             output_textgrid = info["output_textgrid"]
@@ -1152,8 +1162,11 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, momel_path="src/lib
                 logger.error(f"[RUN] 오류 건너뜀: {wav_path}")
                 logger.error(traceback.format_exc())
                 continue
-
-    logger.info("[RUN] 모든 파일 처리가 완료되었습니다.")
+    
+    if stop_flag.is_set():
+        return
+    else:
+        logger.info("[RUN] 모든 파일 처리가 완료되었습니다")
 
 if __name__ == '__main__':
     import argparse
@@ -1173,5 +1186,6 @@ if __name__ == '__main__':
     process_files(
         tsv_file=args.tsv_file,
         output_dir=args.output_dir,
-        stop_flag=stop_flag  # 중지 플래그 전달
+        stop_flag=stop_flag,  # 중지 플래그 전달
+        runner=None,
     )

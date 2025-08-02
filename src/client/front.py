@@ -1,7 +1,6 @@
 import os
 import json
 import time
-from logging.handlers import RotatingFileHandler
 from threading import Thread, Event
 import gradio as gr
 from transcribe.transcriber import process_files
@@ -28,7 +27,7 @@ class TranscriptionRunner:
     def start_transcription(self, tsv_file, output_dir):
         if not os.path.exists(tsv_file):
             return "TSV 파일이 존재하지 않습니다."
-        if self.thread and self.thread.is_alive():
+        if self.trans_running:
             return "이미 작업이 진행 중입니다. 잠시만 기다려주세요."
         
         self.stop_flag.clear()  # 작업 중단 플래그 초기화
@@ -36,32 +35,41 @@ class TranscriptionRunner:
         def run():
             try:
                 logger.info("[FRONT] 작업 시작!")
-                process_files(tsv_file, output_dir, self.stop_flag)
-                logger.info("[FRONT] 작업 완료!")
+                process_files(tsv_file, output_dir, self.stop_flag, runner=self)
+                if self.stop_flag.is_set():
+                    logger.info("[FRONT] 작업이 중단되었습니다.")
+                else:
+                    logger.info("[FRONT] 모든 작업이 성공적으로 완료되었습니다.")
             except Exception as e:
                 logger.error(f"[FRONT] 오류 발생: {e}")
             finally:
-                self.running = False
+                self.trans_running = False
 
-        self.running = True
+        self.trans_running = True
         self.thread = Thread(target=run)
         self.thread.start()
         return "작업이 시작되었습니다."
 
     def stop_transcription(self):
-        if not self.running:
+        if not self.trans_running:
             return "진행 중인 작업이 없습니다."
         self.stop_flag.set()
+        
+        # 살아 있는 Aligner가 있으면 즉시 종료
+        if getattr(self, "current_aligner", None):
+            self.current_aligner.terminate()
+            
         logger.info("[FRONT] 작업 중단 요청이 접수되었습니다.")
+        self.trans_running = False
         return "작업 중단 요청이 접수되었습니다."
 
     def start_log_stream(self):
         """로그 파일 실시간 스트리밍"""
-        if self.running:
+        if self.stream_running:
             logger.info("[FRONT] 이미 로그 스트리밍이 실행 중입니다.")
             return
-        self.running = True
-        logger.info("[FRONT] 로그 스트리밍을 시작합니다.")
+        self.stream_running = True
+        logger.info("[FRONT] 새 로그 스트리밍을 시작합니다.")
         def stream_logs():
             path = LOG_FILE_PATH
             try:
@@ -93,14 +101,15 @@ class TranscriptionRunner:
 
     def stop_log_stream(self):
         """로그 읽기 중단"""
-        self.running = False
+        self.stream_running = False
 
     def get_logs(self):
         """실시간 로그 반환"""
         filtered_lines = []
-        for line in self.log_lines[-20:]:
+        for line in self.log_lines[-50:]:
             if "HTTP Request" in line:
                 continue
+            line = line.replace("\r", "")
             filtered_lines.append(line)
         return "\n".join(filtered_lines) if filtered_lines else "로그가 없습니다."
 
@@ -329,12 +338,22 @@ def create_gradio_interface():
                 return gr.update(), gr.update(), f"❌ 오류: {e}" , ""
 
         def stop_transcription():
-            logger.info("STOP requested – rolling log file.")
-            transcription_runner.stop_log_stream()   # ①
-            force_rollover(logger)                   # ②
-            transcription_runner.start_log_stream()  # ③
+            # 1) 내부적으로 TranscriptionRunner.stop_transcription() 호출 → stop_flag 세팅
             transcription_runner.stop_transcription()
-            return gr.update(visible=True), gr.update(visible=False), "작업이 중단되었습니다.", ""
+            # 2) 기존 로그 스트림 중지
+            transcription_runner.stop_log_stream()
+            # 3) 현재 로그 파일 롤오버 → main.log.1, 새 main.log 생성
+            force_rollover(logger)
+            logger.info("[FRONT] 작업이 중단되었습니다.")
+            # 4) 곧바로 새 로그 스트리밍 시작
+            transcription_runner.start_log_stream()
+
+            return (
+                gr.update(visible=True),    # start 버튼
+                gr.update(visible=False),   # stop 버튼
+                "",                         # log_output은 이제 스트림으로만 채워짐
+                "작업이 중단되었습니다."     # status_output에는 남깁니다.
+            )
         
         status_output = gr.Textbox(
             label="🖥️ 에러/알림 메시지",

@@ -1,7 +1,8 @@
 # src/transcribe/aligner.py
 from __future__ import annotations
-import logging
+
 import json
+import os, signal, shutil
 from pathlib import Path
 import subprocess, tempfile, uuid
 import soundfile as sf
@@ -60,8 +61,22 @@ class MFAAligner:
             cmd = ['ffmpeg', '-y', '-i', str(src), *PCM_ARGS, str(dst)]
             subprocess.run(cmd, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, check=True)
-
-    def align_batch(self, pairs):
+    
+    def terminate(self, timeout=2):
+        """실행 중인 MFA 프로세스를 종료한다(SigTERM → SigKILL)."""
+        if not self.proc or self.proc.poll() is not None:
+            return  # 이미 끝났거나 실행 안 됨
+        try:
+            pgid = os.getpgid(self.proc.pid)     # 프로세스 그룹 ID
+            os.killpg(pgid, signal.SIGTERM)      # 부드럽게 종료
+            try:
+                self.proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                os.killpg(pgid, signal.SIGKILL)  # 확실히 종료
+        except ProcessLookupError:
+            pass
+        
+    def align_batch(self, pairs, stop_flag=None):
         """
         Aligns a batch of audio files with their transcriptions.
         Args:
@@ -75,9 +90,14 @@ class MFAAligner:
             out    = Path(tmp) / "out"   ; out.mkdir()
 
             for wav, txt in pairs:
-                src = Path(wav).resolve()
-                dst = corpus / src.name          # 이름 충돌 주의!
-                self._safe_wav(src, dst)         # ← NEW
+                src = Path(wav).resolve()                # /mount/spk2/hello.wav
+                speaker = src.parent.name                # "spk2"
+                rel_path = Path(speaker) / src.name      # Path("spk2/hello.wav")
+                dst = corpus / rel_path                  # /tmp/.../corpus/spk2/hello.wav
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                
+                shutil.copy2(src, dst)
+                self._safe_wav(src, dst)
                 (dst.with_suffix(".lab")).write_text(txt, 'utf-8')
             logger.info(f"[ALIGNER] {len(pairs)}개의 파일을 준비했습니다.")
             logger.info(f"[ALIGNER] MFA 배치 정렬을 시작합니다... (njobs={self.njobs}, single_spk={self.single_spk})")
@@ -92,17 +112,24 @@ class MFAAligner:
             logger.info("[ALIGNER] MFA command: %s", " ".join(map(str, cmd)))
 
             # ───── subprocess.run → Popen 스트리밍 ─────
-            proc = subprocess.Popen(
+            self.proc = subprocess.Popen(
                 cmd,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                bufsize=1
+                bufsize=1,
+                preexec_fn=os.setsid
             )
-            with proc.stdout:                             # 한 줄씩 읽어서 바로 로거에
-                for line in proc.stdout:
+            with self.proc.stdout:
+                for line in self.proc.stdout:
                     logger.info("[ALIGNER] %s", line.rstrip())
-
+                    # ----- STOP 버튼을 눌렀다면 즉시 종료 -----
+                    if stop_flag is not None and stop_flag.is_set():
+                        self.terminate()
+                        raise RuntimeError("Alignment cancelled by user")
+            
+            self.proc.wait()                                   # 프로세스 종료 대기
+            
             # TextGrid 수집
             grids = {tg.stem: TextGrid.fromFile(str(tg)) for tg in out.rglob("*.TextGrid")}
             return grids
