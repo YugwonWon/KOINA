@@ -28,6 +28,9 @@ from pathlib import Path
 from utils.logger import main_logger
 logger = main_logger.getChild('transcriber')
 
+CONFIG_PATH = "out/config.json"
+MOMEL_PATH = "src/lib/momel/momel_linux"
+
 class IntonationTranscriber:
     """
     억양 자동 전사 클래스
@@ -79,7 +82,7 @@ class IntonationTranscriber:
         return fm.FontProperties(family=fams)  # 첫 번째를 기본 반환
 
     @classmethod
-    def load_config(cls, config_path="out/config.json", momel_path="src/lib/momel/momel_linux"):
+    def load_config(cls, config_path=CONFIG_PATH, momel_path=MOMEL_PATH):
         """
         Config 파일 로드
         """
@@ -124,8 +127,8 @@ class IntonationTranscriber:
         }
 
     def __init__(self, wav_file: str, transcript: str, sex: str, output_textgrid: str,
-                 config_path="out/config.json",
-                 momel_path: str = "src/lib/momel/momel_linux"):
+                 settings = None,
+                 momel_path: str = MOMEL_PATH):
         # 초기화 변수
         self.wav_file = wav_file
         self.transcript = transcript
@@ -135,9 +138,11 @@ class IntonationTranscriber:
         self.sound = parselmouth.Sound(self.wav_file)
         self.duration = self.sound.get_total_duration()
         self.sex = sex
-
-        # cls 변수
-        self.settings = self.get_settings(config_path, momel_path)
+        if settings is None:
+            self.settings = self.get_settings(config_path=CONFIG_PATH,
+                                              momel_path=momel_path)
+        else:
+            self.settings = settings
         self.fontprop = self.get_fontprop()
         self.alignment = None
 
@@ -1056,14 +1061,15 @@ class IntonationTranscriber:
             logger.error(traceback.format_exc())
             return
 
-def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_path="src/lib/momel/momel_linux"):
+def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_path=MOMEL_PATH):
     """
     TSV 파일을 읽어 전체 파일 목록에 대해 MFA 배치 정렬을 먼저 수행하고,
     각 정렬 결과를 IntonationTranscriber에 전달하여 후속 처리를 진행합니다.
     """
     logger.info(f"[FILE] 입력 파일을 처리합니다: {os.path.basename(tsv_file)}")
     os.makedirs(output_dir, exist_ok=True)
-
+    settings = IntonationTranscriber.load_config(config_path=CONFIG_PATH, momel_path=momel_path)
+    
     # WAV 파일 목록을 준비합니다.
     wav_root_dir = "out"  # wav 파일이 있는 상대 경로
     wav_dict = collect_wav_files(wav_root_dir)
@@ -1150,6 +1156,7 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_
                 transcript=info["transcript"],
                 sex=sex,
                 output_textgrid=output_textgrid,
+                settings=settings,
                 momel_path=momel_path
             )
             # MFAAligner에서 얻은 TextGrid 정렬 결과를 주입

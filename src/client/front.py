@@ -331,6 +331,8 @@ def create_gradio_interface():
                     config["max_pitch_female"] = float(F_max_val) if F_max_val else 600.0
 
                 save_config(config)  # 설정 저장
+                # config log 출력
+                logger.info(f"[FRONT] 설정: {json.dumps(config, indent=4, ensure_ascii=False)}")
                 transcription_runner.start_transcription(tsv_file, config["output_dir"])
                 return gr.update(visible=False), gr.update(visible=True), "작업이 시작되었습니다.", ""
 
