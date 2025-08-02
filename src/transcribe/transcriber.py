@@ -163,10 +163,10 @@ class IntonationTranscriber:
         local_max_pitch = self.settings["max_pitch"]
 
         # 성별 정보가 있다면, 해당 정보를 우선 적용
-        if sex == "M":
+        if sex in {"M", "m", "male", "man", "boy", "남성", "남", "남자"}:
             local_min_pitch = self.settings["min_pitch_male"]
             local_max_pitch = self.settings["max_pitch_male"]
-        elif sex == "F":
+        elif sex in {"F", "f", "female", "woman", "girl", "여성", "여", "여자"}:
             local_min_pitch = self.settings["min_pitch_female"]
             local_max_pitch = self.settings["max_pitch_female"]
 
