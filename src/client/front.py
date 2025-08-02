@@ -1,6 +1,5 @@
 import os
 import json
-import logging
 import time
 from threading import Thread, Event
 import gradio as gr
@@ -12,85 +11,106 @@ CONFIG_FILE = "out/config.json"  # Config 파일 경로
 os.makedirs(os.path.dirname(LOG_FILE_PATH), exist_ok=True)
 
 # 로거 설정
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", filename=LOG_FILE_PATH, filemode='a')
-logger = logging.getLogger("front")
-if not logger.handlers:
-    logger.addHandler(logging.StreamHandler())
+from utils.logger import main_logger, force_rollover
+logger = main_logger.getChild('front')
 
 class TranscriptionRunner:
     """억양 전사 프론트 메인 객체"""
 
     def __init__(self):
         self.thread = None
-        self.running = False
+        self.trans_running  = False   # 전사 작업 상태
+        self.stream_running = False   # 로그 스트림 상태
+        self.current_aligner = None   # 현재 Aligner 인스턴스
         self.stop_flag = Event()
         self.log_lines = []
 
-    def start_transcription(self, tsv_file, output_dir, momel_path="src/lib/momel/momel_linux"):
+    def start_transcription(self, tsv_file, output_dir):
         if not os.path.exists(tsv_file):
             return "TSV 파일이 존재하지 않습니다."
-        if self.thread and self.thread.is_alive():
+        if self.trans_running:
             return "이미 작업이 진행 중입니다. 잠시만 기다려주세요."
         
         self.stop_flag.clear()  # 작업 중단 플래그 초기화
 
         def run():
             try:
-                logger.info("작업 시작!")
-                process_files(tsv_file, output_dir, momel_path, self.stop_flag)
-                logger.info("작업 완료!")
+                logger.info("[FRONT] 작업 시작!")
+                process_files(tsv_file, output_dir, self.stop_flag, runner=self)
+                if self.stop_flag.is_set():
+                    logger.info("[FRONT] 작업이 중단되었습니다.")
+                else:
+                    logger.info("[FRONT] 모든 작업이 성공적으로 완료되었습니다.")
             except Exception as e:
-                logger.error(f"오류 발생: {e}")
+                logger.error(f"[FRONT] 오류 발생: {e}")
             finally:
-                self.running = False
+                self.trans_running = False
 
-        self.running = True
+        self.trans_running = True
         self.thread = Thread(target=run)
         self.thread.start()
         return "작업이 시작되었습니다."
 
     def stop_transcription(self):
-        if not self.running:
+        if not self.trans_running:
             return "진행 중인 작업이 없습니다."
         self.stop_flag.set()
-        logger.info("작업 중단 요청이 접수되었습니다.")
+        
+        # 살아 있는 Aligner가 있으면 즉시 종료
+        if getattr(self, "current_aligner", None):
+            self.current_aligner.terminate()
+            
+        logger.info("[FRONT] 작업 중단 요청이 접수되었습니다.")
+        self.trans_running = False
         return "작업 중단 요청이 접수되었습니다."
 
     def start_log_stream(self):
         """로그 파일 실시간 스트리밍"""
-        if self.running:
-            logger.info("이미 로그 스트리밍이 실행 중입니다.")
+        if self.stream_running:
+            logger.info("[FRONT] 이미 로그 스트리밍이 실행 중입니다.")
             return
-        self.running = True
-        logger.info("로그 스트리밍을 시작합니다.")
+        self.stream_running = True
+        logger.info("[FRONT] 새 로그 스트리밍을 시작합니다. http://localhost:40080 에서 확인하세요.")
         def stream_logs():
+            path = LOG_FILE_PATH
             try:
-                with open(LOG_FILE_PATH, "r", encoding="utf-8") as log_file:
-                    log_file.seek(0, os.SEEK_END)  # 파일 끝으로 이동
-                    while self.running:
-                        line = log_file.readline()
+                with open(path, "r", encoding="utf-8") as f:
+                    f.seek(0, os.SEEK_END)
+                    inode = os.fstat(f.fileno()).st_ino
+                    while self.stream_running:
+                        line = f.readline()
                         if line:
                             self.log_lines.append(line.strip())
                             if len(self.log_lines) > 100:
                                 self.log_lines.pop(0)
                         else:
                             time.sleep(0.1)
+                            # 롤오버되었는지 확인
+                            if not os.path.exists(path):
+                                continue  # 드물지만 파일 잠시 사라질 수 있음
+                            new_inode = os.stat(path).st_ino
+                            if new_inode != inode:
+                                # 파일 핸들 교체
+                                f.close()
+                                f = open(path, "r", encoding="utf-8")
+                                inode = new_inode
             except Exception as e:
-                logger.error(f"로그 스트리밍 중 오류 발생: {e}")
+                logger.error(f"[FRONT] 로그 스트리밍 중 오류 발생: {e}")
 
         log_thread = Thread(target=stream_logs, daemon=True)
         log_thread.start()
 
     def stop_log_stream(self):
         """로그 읽기 중단"""
-        self.running = False
+        self.stream_running = False
 
     def get_logs(self):
         """실시간 로그 반환"""
         filtered_lines = []
-        for line in self.log_lines[-20:]:
+        for line in self.log_lines[-50:]:
             if "HTTP Request" in line:
                 continue
+            line = line.replace("\r", "")
             filtered_lines.append(line)
         return "\n".join(filtered_lines) if filtered_lines else "로그가 없습니다."
 
@@ -101,14 +121,14 @@ def save_config(config):
     os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=4)
-    logger.info(f"설정이 {CONFIG_FILE}에 저장되었습니다.")
+    logger.info(f"[FRONT] 설정이 {CONFIG_FILE}에 저장되었습니다.")
 
 def load_config():
     """Config 파일 로드"""
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    logger.warning("Config 파일이 없습니다. 기본값을 사용합니다.")
+    logger.warning("[FRONT] Config 파일이 없습니다. 기본값을 사용합니다.")
     return {}
 
 def toggle_gender_range(use_gender_range_val):
@@ -154,8 +174,11 @@ def create_gradio_interface():
         "show_spline": False,
         "is_synthesis_save": False,
         "is_spline_syntheis_save": False,
+        "is_only_alignment": False,
         "fixed_y_min": 0,
-        "fixed_y_max": 600
+        "fixed_y_max": 600,
+        "alignment_njobs": 4,
+        "alignment_single_spk": False,
     }
 
     with gr.Blocks(css=".custom-box {margin-top: 20px;}") as main:
@@ -184,7 +207,6 @@ def create_gradio_interface():
         gr.Markdown("### 🎛️ Pitch Parameters")  # 섹션 제목 추가
 
         with gr.Row():
-            # 좌측 4개 배치
             with gr.Column():
                 min_pitch = gr.Textbox(label="Min Pitch", placeholder="기본값: 75")
                 time_step = gr.Textbox(label="Pitch Step", placeholder="기본값: 0.01")
@@ -192,7 +214,6 @@ def create_gradio_interface():
                 octave_cost = gr.Textbox(label="Octave Cost", placeholder="기본값: 0.05")
                 very_accurate = gr.Textbox(label="Very Accurate", placeholder="기본값: 0")
 
-            # 우측 5개 배치
             with gr.Column():
                 max_pitch = gr.Textbox(label="Max Pitch", placeholder="기본값: 600")
                 number_of_candidates = gr.Textbox(label="Number of Candidates", placeholder="기본값: 15")
@@ -219,6 +240,12 @@ def create_gradio_interface():
             outputs=[M_min, M_max, F_min, F_max],
         )
         
+        # 정규화 옵션 선택
+        gr.Markdown("### 📐 Normalization Option")
+        with gr.Row():
+            fixed_y_min = gr.Textbox(label="Y축 최솟값 (Y-axis Min)", placeholder="기본값: 0")
+            fixed_y_max = gr.Textbox(label="Y축 최댓값 (Y-axis Max)", placeholder="기본값: 600")
+            
         # 합성 음성 저장 여부 선택(boolean)
         gr.Markdown("### 📂 Output Options")
         # 체크박스로 합성 음성 저장 여부 선택
@@ -234,13 +261,18 @@ def create_gradio_interface():
                 label = "연결 곡선(spline) 윤곽 합성 음성 저장",
                 value = default_config["is_spline_syntheis_save"],
                 interactive = True)
-            
-        # 정규화 옵션 선택
-        gr.Markdown("### 📐 Normalization Option")
-        with gr.Row():
-            fixed_y_min = gr.Textbox(label="Y축 최솟값 (Y-axis Min)", placeholder="기본값: 0")
-            fixed_y_max = gr.Textbox(label="Y축 최댓값 (Y-axis Max)", placeholder="기본값: 600")
         
+        # Align Options
+        gr.Markdown("### 📏 Alignment Options")
+        # 음성-텍스트 정렬 옵션
+        with gr.Row():
+            is_only_alignment = gr.Checkbox(
+                label="음성-텍스트 시간 정렬만 수행(억양 분석을 하지 않음)",
+                value=default_config["is_only_alignment"],
+                interactive=True
+            )
+            single_spk = gr.Checkbox(label="단일 화자 모드(전체 오디오를 녹음한 화자 수가 한 명인 경우)", value=default_config["alignment_single_spk"], interactive=True)
+            njobs = gr.Textbox(label="병렬 처리 작업 수(동시에 사용할 CPU 코어/프로세스 개수)", placeholder="기본값: 4", interactive=True)
         
         # 버튼 및 상태 출력
         start_button = gr.Button("작업 시작")
@@ -262,7 +294,9 @@ def create_gradio_interface():
                         fixed_y_min, fixed_y_max,
                         use_gender_range_val,
                         M_min_val, M_max_val, F_min_val, F_max_val,
-                        is_synthesis_save, is_spline_syntheis_save):
+                        is_synthesis_save, is_spline_syntheis_save,
+                        is_only_alignment,
+                        njobs, single_spk):
             try:
                 if not tsv_file:
                     return gr.update(), gr.update(), "", "❌ 오류: TSV/CSV 파일이 선택되지 않았습니다."
@@ -285,7 +319,10 @@ def create_gradio_interface():
                     "fixed_y_min": validate_and_convert(fixed_y_min, default_config.get("fixed_y_min", 0), float, "Y axis minimum"),
                     "fixed_y_max": validate_and_convert(fixed_y_max, default_config.get("fixed_y_max", 600), float, "Y axis maximum"),
                     "is_synthesis_save": is_synthesis_save,
-                    "is_spline_syntheis_save": is_spline_syntheis_save
+                    "is_spline_syntheis_save": is_spline_syntheis_save,
+                    "is_only_alignment": is_only_alignment,  # 기본값은 False로 설정
+                    "alignment_njobs": validate_and_convert(njobs, default_config["alignment_njobs"], int, "병렬 처리 작업 수"),
+                    "alignment_single_spk": validate_and_convert(single_spk, default_config["alignment_single_spk"], bool, "단일 화자 모드"),
                 }
                 if use_gender_range_val:
                     config["min_pitch_male"] = float(M_min_val) if M_min_val else 75.0
@@ -294,6 +331,8 @@ def create_gradio_interface():
                     config["max_pitch_female"] = float(F_max_val) if F_max_val else 600.0
 
                 save_config(config)  # 설정 저장
+                # config log 출력
+                logger.info(f"[FRONT] 설정: {json.dumps(config, indent=4, ensure_ascii=False)}")
                 transcription_runner.start_transcription(tsv_file, config["output_dir"])
                 return gr.update(visible=False), gr.update(visible=True), "작업이 시작되었습니다.", ""
 
@@ -302,8 +341,22 @@ def create_gradio_interface():
                 return gr.update(), gr.update(), f"❌ 오류: {e}" , ""
 
         def stop_transcription():
+            # 1) 내부적으로 TranscriptionRunner.stop_transcription() 호출 → stop_flag 세팅
             transcription_runner.stop_transcription()
-            return gr.update(visible=True), gr.update(visible=False), "작업이 중단되었습니다.", ""
+            # 2) 기존 로그 스트림 중지
+            transcription_runner.stop_log_stream()
+            # 3) 현재 로그 파일 롤오버 → main.log.1, 새 main.log 생성
+            force_rollover(logger)
+            logger.info("[FRONT] 작업이 중단되었습니다.")
+            # 4) 곧바로 새 로그 스트리밍 시작
+            transcription_runner.start_log_stream()
+
+            return (
+                gr.update(visible=True),    # start 버튼
+                gr.update(visible=False),   # stop 버튼
+                "",                         # log_output은 이제 스트림으로만 채워짐
+                "작업이 중단되었습니다."     # status_output에는 남깁니다.
+            )
         
         status_output = gr.Textbox(
             label="🖥️ 에러/알림 메시지",
@@ -330,7 +383,9 @@ def create_gradio_interface():
                 fixed_y_min, fixed_y_max,
                 use_gender_range,
                 M_min, M_max, F_min, F_max,
-                is_synthesis_save, is_spline_syntheis_save
+                is_synthesis_save, is_spline_syntheis_save,
+                is_only_alignment,
+                njobs, single_spk
             ],
             outputs=[start_button, stop_button, log_output, status_output]
         )
@@ -352,4 +407,4 @@ def create_gradio_interface():
 
 if __name__ == '__main__':
     main = create_gradio_interface()
-    main.launch(server_name="0.0.0.0", server_port=7861)
+    main.launch(server_name="0.0.0.0", server_port=40080)

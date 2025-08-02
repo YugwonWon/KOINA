@@ -1,4 +1,5 @@
 # KOINA (Korean Intonation Annotator)
+
 <p align="center">
   <img src="https://github.com/user-attachments/assets/6e4d95ca-9c29-46cb-b543-d0d3bf245f25" width="400">
 </p>
@@ -10,6 +11,7 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
 ---
 
 ## 목차
+
 1. **주요 기능**
 2. **Docker 환경에서의 사용 방법**
 3. **Python 환경에서의 사용 방법**
@@ -20,23 +22,25 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
 ---
 
 ## 1. 주요 기능
+
 1. **Momel 기반 억양 윤곽 추적**
+
    - 음높이(F0) 목표점 추출: 알고리즘을 통해 F0 윤곽을 추출
    - 삼차 연결 곡선(spline) 적용: 목표점을 기반으로 곡선 형태의 억양 윤곽을 재현
    - TCoG 추출: 음높이 무게 중심
-
 2. **음성-텍스트 강제 정렬**
+
    - 어절 및 음소 레벨 정렬
    - 정렬 결과를 TextGrid 파일로 생성하여, 구간별 분석이 용이
-
 3. **F0 목표점 최소화**
+
    - 기울기 기반 단순화: F0 목표점을 제거하여 효율적인 윤곽 생성
    - 지각적 일관성 유지: 목표점을 단순화하여도 청각적 인식은 원본과 동일 수준 유지
-
 4. **Pitch Doubling/Halving 보정**
-   - 자동 감지 및 수정: 기존 F0 윤곽에서 배증 혹은 반감으로 튀는 오차를 보정하고 안정화
 
+   - 자동 감지 및 수정: 기존 F0 윤곽에서 배증 혹은 반감으로 튀는 오차를 보정하고 안정화
 5. **시각화 및 결과 저장**
+
    - TextGrid 파일 출력: Praat 등 음성 분석 툴과 호환 가능한 형식
    - JPEG 그래프 저장: 분석 결과를 바로 확인 가능한 이미지로 제공
    - 음성 합성 WAV 저장: 음성 합성된 WAV 파일 저장
@@ -44,102 +48,161 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
 ---
 
 ## 2. Docker 환경에서의 사용 방법
-KOINA는 공식 Docker 이미지를 통해 간편하게 실행할 수 있습니다. 로컬 환경에서 별도로 구축해야 할 의존성 없이, Docker 컨테이너 실행만으로 웹 인터페이스에 접근할 수 있습니다.
 
-1. **도커 설치**
-   - 로컬 컴퓨터에 Docker를 먼저 설치합니다. (운영체제별 설치 방법은 [Docker Docs](https://docs.docker.com/get-docker/) 참고)
+1. KOINA는 **공식 Docker 이미지**를 통해 별도 의존성 설치 없이 바로 실행할 수 있습니다. 로컬 PC·서버 어디서든 동일한 절차로 웹 UI([http://localhost:40080](http://localhost:40080))에 접근할 수 있습니다.
 
-2. **이미지 받기 (pull)**
-   ```bash
-   docker pull linky1584/koina:latest
+| 단계                                                       | 터미널 명령어 및 설명                                                                                                                                                                                                                                                           |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1. Docker Desktop / Docker Engine 설치**           | [https://docs.docker.com/get-docker/](https://docs.docker.com/get-docker/)                                                                                                                                                                                                         |
+| **2. 이미지 받기**                                   | ``docker pull linky1584/koina:latest``                                                                                                                                                                                                                                          |
+| **3-A. Intel/AMD PC에서 실행**                       | ``docker run --rm -p 40080:40080 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest``                                                                                                                                                                           |
+| **3-B. Apple Silicon(M1/M2) 맥 / ARM 서버에서 실행** | QEMU 에뮬레이션으로 amd64 이미지를 구동합니다.<br /><br />`docker run --rm --platform linux/amd64 -p 40080:40080 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest`<br /><br />**Tip ** : 첫 구동 시 다운로드·초기화 때문에 2-3분 정도 걸릴 수 있습니다. |
+| **4. 웹 UI 접속**                                    | 브라우저에[http://localhost:40080](http://localhost:40080) 입력 → 파일 업로드·실행                                                                                                                                                                                               |
+| **5. 컨테이너 종료**                                 | 터미널에서 `Ctrl + C` 또는 다른 쉘에서 `docker stop koina`                                                                                                                                                                                                                  |
 
-3. **도커 실행**
-   - 아래 명령어(CMD)는 사용자가 로컬에 있는 오디오 파일들이 위치한 폴더 경로를 `/your/audio/path` 부분에 넣어 실행하는 예시입니다.
-   ```
-   docker run --rm -p 7861:7861 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest
+2. 정상 접속 화면
 
-4. **웹 인터페이스 실행**
-   - 도커를 실행했다면, 인터넷 창을 열고 아래 주소를 입력해서 클라이언트를 실행합니다. 
-   - 실행되기까지 몇 분 정도 소요될 수 있습니다.
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/20dce17c-3b1f-40cb-954c-e8a26bf68dc2" width="1237" height="643" alt="Image">
+</p>
 
-   ```
-   http://localhost:7861
-   ```
+3-1. **csv(tsv)파일 입력**
 
-   <p align="center">
-     <img src="https://github.com/user-attachments/assets/5887a465-1946-46f5-9ed8-2d0251ac2d16" width="1397">
-   </p>
+- 아래는 CSV/TSV 파일 예시입니다. 각 열(column)의 이름은 반드시 `filename`, `sex`, `text` 를 포함해야, CSV의 경우 쉼표로 구분하고, TSV의 경우 탭으로 구분하는 것만 다릅니다.
 
-5. **csv(tsv)파일 입력**
-   - 아래는 CSV/TSV 파일 예시입니다. 각 열(컬럼)은 반드시 `wav_filename`, `sex`, `text` 순서를 지켜야 하며, CSV의 경우 쉼표로 구분하고, TSV의 경우 탭으로 구분하는 것만 다릅니다.
+**TSV 예시**
 
-   #### TSV 예시
-   ```tsv
-   wav_filename    sex    text
+```tsv
+   filename    sex    text
    SDRW2200000001.1.1.1.wav    M    어 여기서 학교 얘기가 나와서
+```
 
-## 3. Python 환경에서의 사용 방법
+3-2. 음성-텍스트 정렬 코퍼스 폴더 구조 및 화자 설정
 
-아래에서는 `./src/transcribe/transcriber.py` 스크립트를 중심으로, Python 환경에서 KOINA 억양 전사 모듈을 실행하는 방법을 소개합니다.
+KOINA는 `도커가 실행될 때 유저가 볼륨 마운트(-v 명령어)한 폴더가 out/` 디렉토리에 연결되고, 이 폴더를 기준으로 WAV 파일을 읽어들입니다. 그리고 MFA 배치 정렬 시 **폴더별 화자**를 인식해 병렬 처리(job)를 자동 분배합니다. 하지만 별도 화자 구분을 가정하지 않고 주제, 대화별 폴더를 구성하여도 상관 없습니다.
+
+- 단일 폴더에 모든 WAV 배치
+
+```text
+  out/
+    a.wav
+    b.wav
+    c.wav
+```
+
+- 화자별 하위 폴더 분리 예시
+
+```text
+out/
+  speaker1/
+    a.wav
+    b.wav
+  speaker2/
+    c.wav
+    d.wav
+  speaker3/
+    e.wav
+```
 
 ---
 
+## 3. Python 로컬 환경에서 직접 실행하기 (Linux, Conda 권장)
+
+아래에서는 `./src/transcribe/transcriber.py` 스크립트를 중심으로, Python 환경에서 KOINA 억양 전사 모듈을 실행하는 방법을 소개합니다.
+
 1. **사전 준비**
-   -  먼저 현재 리포지토리를 클론(clone)합니다. 예시로, 로컬 머신에서 다음 명령어를 사용할 수 있습니다:
+
+   - 먼저 현재 리포지토리를 클론(clone)합니다. 예시로, 로컬 머신에서 다음 명령어를 사용할 수 있습니다:
 
    ```bash
    git clone https://github.com/YugwonWon/KOINA.git
    ```
+2. Miniforge/Anaconda 설치 (한 번만)
 
-2. **가상환경(venv) 생성 및 라이브러리 설치**
-   - 연구 환경이나 서버별로 파이썬 라이브러리가 상이할 수 있으므로, 가능한 한 독립적인 가상환경을 마련하는 편이 좋습니다. 다음과 같은 절차로 venv를 생성하고 필요한 라이브러리를 설치할 수 있습니다:
-   ```bash
-   # 가상환경(venv) 생성
-   python -m venv venv
+   - 설치 가이드는 https://docs.conda.io/projects/miniconda/en/latest/ 참조
+   - Windows PowerShell·macOS Terminal·Linux bash 모두 동일합니다.
+3. Conda 가상환경 생성 & 패키지 설치
 
-   # 가상환경 활성화 (Windows, Mac/Linux 명령어 상이)
-   # 예: Mac/Linux
-   source venv/bin/activate
-
-   # 예: Windows
-   .\venv\Scripts\activate
-
-   # requirements 설치
-   pip install -r requirements.txt
    ```
+   # 3-1) 새 환경 생성
+   conda create -y -n koina python=3.10
+   conda activate koina
 
-3. **스크립트 실행**
-   - transcriber.py에는 억양 전사를 위한 핵심 로직이 포함되어 있으며, 터미널(또는 커맨드라인)에서 아규먼트를 지정해 실행할 수 있습니다. 예시 명령어는 다음과 같습니다:
-   ```bash
+   # 3-2) 채널 설정
+   conda config --add channels conda-forge
+   conda config --set channel_priority strict
+
+   # 3-3) 주요 패키지 + MFA 3.2.1 설치
+   mamba install -y \
+     montreal-forced-aligner=3.2.1 \
+     numpy pandas scipy matplotlib tqdm \
+     textgrid pydub ffmpeg-python
+
+   # 3-4) 한국어 토크나이저 및 부가 패키지
+   pip install python-mecab-ko jamo \
+               gradio soundfile==0.12.1 praat-parselmouth
+
+   # 3-5) MFA 한국어 모델 다운로드
+   mfa model download dictionary korean_mfa
+   mfa model download acoustic   korean_mfa
+   ```
+4. 스크립트 실행
+
+- transcriber.py에는 억양 전사를 위한 핵심 로직이 포함되어 있으며, 터미널(또는 커맨드라인)에서 argument를 지정해 실행할 수 있습니다. 예시 명령어는 다음과 같습니다:
+
+```bash
    python ./src/transcribe/transcriber.py \
     data/input.tsv \
     out \
-    --momel_path src/lib/momel/momel_linux
-   ```
+```
+
+---
 
 ## 4. 이슈 보고 및 피드백
-프로젝트는 아직 완성 단계가 아니며, 다양한 실제 음성 분석 현장에서 얻은 피드백을 통해 개선될 여지가 많습니다.  
-- **버그 리포트**: 예기치 않은 오류가 발생했을 경우, 재현 가능한 단계와 로그 정보, 사용한 입력 파일(일부 샘플)을 보내주시면 문제 파악에 큰 도움이 됩니다.  
+
+프로젝트는 아직 완성 단계가 아니며, 다양한 실제 음성 분석 현장에서 얻은 피드백을 통해 개선될 여지가 많습니다.
+
+- **버그 리포트**: 예기치 않은 오류가 발생했을 경우, 재현 가능한 단계와 로그 정보, 사용한 입력 파일(일부 샘플)을 보내주시면 문제 파악에 큰 도움이 됩니다.
 - **기능 요청**: 추가로 필요한 기능이나 개선 사항이 있다면 자유롭게 이슈(이야기)를 남겨주세요.
 
 ---
 
 ## 5. Reference
-- 원유권(2025). 한국어 억양 자동 주석기 개발 연구, 건국대학교 대학원 박사학위논문. [링크]
+
+- 원유권(2025). 한국어 억양 자동 주석기 개발 연구, 건국대학교 대학원 박사학위논문. [링크 예정]
 
 ---
 
 ## 6. Cites
- - 아래의 DOI 또는 BibTeX를 통해 인용해주세요.
- - DOI: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15034862.svg)](https://doi.org/10.5281/zenodo.15034862)
- - BibTeX:
+
+- 아래의 DOI 또는 BibTeX를 통해 인용해주세요.
+- DOI: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15034862.svg)](https://doi.org/10.5281/zenodo.15034862)
+- BibTeX:
+
 ```bibtex
 @misc{KOINA,
   author = {Won, YuGwon},
   title = {KOINA: Korean Intonation Annotator},
   year = {2025},
-  version = {v0.5.0},
+  version = {v1.0.0},
   doi = {\url{https://doi.org/10.5281/zenodo.15034862}},
   journal = {Github repository},
   note = {\url{https://github.com/YugwonWon/KOINA}}
 }
+```
+
+---
+
+🐳 Found it useful? Sponsor us or buy me a coffee!
+
+<p align="left">
+   <a href="https://github.com/sponsors/YugwonWon" target="_blank">
+    <img 
+      src="https://img.shields.io/github/sponsors/YugwonWon?style=for-the-badge" 
+      alt="GitHub Sponsors" />
+  </a>
+  <a href="https://buymeacoffee.com/yugwonwon" target="_blank">
+    <img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-yellow?logo=buy-me-a-coffee&style=for-the-badge"
+         alt="Buy Me A Coffee" />
+  </a>
+</p>
