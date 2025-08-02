@@ -34,6 +34,7 @@ class MFAAligner:
     """
 
     def __init__(self, dict_path: str = "korean_mfa", model: str = "korean_mfa"):
+        self.proc = None
         self.dict_path = dict_path
         self.model = model
         self.config = None
