@@ -36,19 +36,12 @@ class IntonationTranscriber:
     억양 자동 전사 클래스
     """
     _fontprop = None
-    _settings = None
 
     @classmethod
     def get_fontprop(cls):
         if cls._fontprop is None:
             cls._fontprop = cls.set_korean_font()
         return cls._fontprop
-
-    @classmethod
-    def get_settings(cls, config_path, momel_path):
-        if cls._settings is None:
-            cls._settings = cls.load_config(config_path, momel_path)
-        return cls._settings
 
     @classmethod
     def set_korean_font(cls):
@@ -1035,7 +1028,6 @@ class IntonationTranscriber:
             self.create_textgrid()
             if self.settings['is_only_alignment']:
                 self.save_textgrid()
-                logger.info("[RUN] 정렬만 수행하고 종료합니다.")
                 return
             self.run_momel_based_labels()
             self.add_tcog_tier()
