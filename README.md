@@ -70,7 +70,7 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
 
 - 아래는 CSV/TSV 파일 예시입니다. 각 열(column)의 이름은 반드시 `filename`, `sex`, `text` 를 포함해야, CSV의 경우 쉼표로 구분하고, TSV의 경우 탭으로 구분하는 것만 다릅니다.
 
-#### TSV 예시
+**TSV 예시**
 
 ```tsv
    filename    sex    text
@@ -79,7 +79,7 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
 
 3-2. 음성-텍스트 정렬 코퍼스 폴더 구조 및 화자 설정
 
-KOINA는 `out/` 디렉토리를 기준으로 WAV 파일을 읽어들이고, MFA 배치 정렬 시 **폴더별 화자**를 인식해 병렬 처리(job)를 자동 분배합니다. 하지만 별도 화자 구분을 가정하지 않고 주제, 대화별 폴더를 구성하여도 상관 없습니다.
+KOINA는 `도커가 실행될 때 유저가 볼륨 마운트(-v 명령어)한 폴더가 out/` 디렉토리에 연결되고, 이 폴더를 기준으로 WAV 파일을 읽어들입니다. 그리고 MFA 배치 정렬 시 **폴더별 화자**를 인식해 병렬 처리(job)를 자동 분배합니다. 하지만 별도 화자 구분을 가정하지 않고 주제, 대화별 폴더를 구성하여도 상관 없습니다.
 
 - 단일 폴더에 모든 WAV 배치
 
@@ -103,7 +103,6 @@ out/
   speaker3/
     e.wav
 ```
-
 
 ---
 
@@ -194,7 +193,7 @@ out/
 
 ---
 
-🐳 Found it useful? Sponsor us or buy me a coffee! 
+🐳 Found it useful? Sponsor us or buy me a coffee!
 
 <p align="left">
    <a href="https://github.com/sponsors/YugwonWon" target="_blank">
