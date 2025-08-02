@@ -21,6 +21,7 @@ class TranscriptionRunner:
         self.thread = None
         self.trans_running  = False   # 전사 작업 상태
         self.stream_running = False   # 로그 스트림 상태
+        self.current_aligner = None   # 현재 Aligner 인스턴스
         self.stop_flag = Event()
         self.log_lines = []
 
