@@ -169,7 +169,7 @@ out/
 
 ## 5. Reference
 
-- 원유권(2025). 한국어 억양 자동 주석기 개발 연구, 건국대학교 대학원 박사학위논문. [[링크](https://www.riss.kr/search/detail/DetailView.do?p_mat_type=be54d9b8bc7cdb09&control_no=1cbfcc7b60e1739bffe0bdc3ef48d419&keyword=%ED%95%9C%EA%B5%AD%EC%96%B4%20%EC%96%B5%EC%96%91%20%EC%9E%90%EB%8F%99%20%EC%A3%BC%EC%84%9D%EA%B8%B0%20%EA%B0%9C%EB%B0%9C%20%EC%97%B0%EA%B5%AC)]
+- 원유권(2025). 한국어 억양 자동 주석기 개발 연구, 건국대학교 대학원 박사학위논문. <a href="https://www.riss.kr/search/detail/DetailView.do?p_mat_type=be54d9b8bc7cdb09&control_no=1cbfcc7b60e1739bffe0bdc3ef48d419&keyword=%ED%95%9C%EA%B5%AD%EC%96%B4%20%EC%96%B5%EC%96%91%20%EC%9E%90%EB%8F%99%20%EC%A3%BC%EC%84%9D%EA%B8%B0%20%EA%B0%9C%EB%B0%9C%20%EC%97%B0%EA%B5%AC" target="_blank">[링크]</a>
 
 ## 6. Cites
 
