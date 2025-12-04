@@ -7,7 +7,7 @@
       "program": "${file}",
       "console": "integratedTerminal",
       "env": {
-        "PYTHONPATH": "src:src/lib:src/client:src/analyze:src/trasncribe"
+        "PYTHONPATH": "src:src/lib:src/client:src/analyze:src/transcribe"
       }
     }
   ]
