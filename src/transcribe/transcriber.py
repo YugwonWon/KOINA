@@ -1053,17 +1053,29 @@ class IntonationTranscriber:
             logger.error(traceback.format_exc())
             return
 
-def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_path=MOMEL_PATH):
+def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_path=MOMEL_PATH,
+                  wav_root_dir: str = "/data3/yugwon/auto-trans-k-intonation/data/splitted",
+                  save_dir: str = "out/processed-style"):
     """
     TSV 파일을 읽어 전체 파일 목록에 대해 MFA 배치 정렬을 먼저 수행하고,
     각 정렬 결과를 IntonationTranscriber에 전달하여 후속 처리를 진행합니다.
+    
+    Args:
+        tsv_file: 입력 TSV 파일 경로
+        output_dir: (deprecated) 기존 호환성을 위해 유지, save_dir 사용 권장
+        stop_flag: 중지 플래그
+        runner: 실행 객체
+        momel_path: Momel 경로
+        wav_root_dir: WAV 파일이 있는 디렉토리 경로
+        save_dir: 결과 파일이 저장될 디렉토리 경로
     """
     logger.info(f"[FILE] 입력 파일을 처리합니다: {os.path.basename(tsv_file)}")
-    os.makedirs(output_dir, exist_ok=True)
+    logger.info(f"[FILE] WAV 파일 경로: {wav_root_dir}")
+    logger.info(f"[FILE] 저장 경로: {save_dir}")
+    os.makedirs(save_dir, exist_ok=True)
     settings = IntonationTranscriber.load_config(config_path=CONFIG_PATH, momel_path=momel_path)
     
     # WAV 파일 목록을 준비합니다.
-    wav_root_dir = "out"  # wav 파일이 있는 상대 경로
     wav_dict = collect_wav_files(wav_root_dir)
 
     pairs = []  # (wav_path, transcript) 목록
@@ -1077,6 +1089,7 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_
                     logger.info("[RUN] 처리 중지 요청이 감지되어 작업을 중단합니다")
                     return
                 wav_file_name = row.get("filename", "").strip()
+                wav_file_name = f"{wav_file_name}.wav"
                 transcript = row.get("text", "")
                 sex = row.get("sex", "")
                 if wav_file_name not in wav_dict:
@@ -1084,8 +1097,8 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_
                     continue
                 wav_file_path = wav_dict[wav_file_name]
                 base_name = os.path.splitext(os.path.basename(wav_file_path))[0]
-                # 출력 디렉토리 생성
-                out_subdir = f"{output_dir}/{base_name.split('.')[0]}"
+                # 출력 디렉토리 생성 (save_dir 사용)
+                out_subdir = f"{save_dir}/{base_name.split('.')[0]}"
                 os.makedirs(out_subdir, exist_ok=True)
                 output_textgrid = os.path.join(out_subdir, f"{base_name}_{sex}.TextGrid")
                 pairs.append((wav_file_path, transcript))
@@ -1142,6 +1155,12 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_
             output_textgrid = info["output_textgrid"]
             sex = info["sex"]
             tg       = grid_dict.get(base)
+            
+            # MFA 정렬 결과가 없으면 건너뛰기
+            if tg is None:
+                logger.warning(f"[RUN] MFA 정렬 결과 없음 (건너뜀): {wav_path}")
+                continue
+                
             # IntonationTranscriber 생성 시 미리 정렬 결과를 전달합니다.
             transcriber = IntonationTranscriber(
                 wav_file=str(wav_path),
@@ -1172,10 +1191,12 @@ if __name__ == '__main__':
     from threading import Event
 
     parser = argparse.ArgumentParser(description="억양 자동 주석 도구 (TSV 입력)")
-    parser.add_argument("tsv_file", type=str, nargs='?', default="tests/samples/input.tsv",
+    parser.add_argument("tsv_file", type=str, nargs='?', default="data/133_parsed_output_sample.tsv",
                         help="입력 TSV 파일 경로 (wavfile_path와 text 컬럼 포함)")
-    parser.add_argument("output_dir", type=str, nargs='?', default='out',
-                        help="출력 TextGrid 파일들이 저장될 디렉토리 경로, out경로에 입력 대상 wav 파일이 있어야 합니다.")
+    parser.add_argument("--wav_root_dir", type=str, default='/data3/yugwon/auto-trans-k-intonation/data/splitted',
+                        help="WAV 파일이 있는 디렉토리 경로")
+    parser.add_argument("--save_dir", type=str, default='out/processed-style',
+                        help="출력 TextGrid 파일들이 저장될 디렉토리 경로")
 
     args = parser.parse_args()
 
@@ -1184,7 +1205,9 @@ if __name__ == '__main__':
 
     process_files(
         tsv_file=args.tsv_file,
-        output_dir=args.output_dir,
-        stop_flag=stop_flag,  # 중지 플래그 전달
+        output_dir=args.save_dir,  # 하위 호환성을 위해 유지
+        stop_flag=stop_flag,
         runner=None,
+        wav_root_dir=args.wav_root_dir,
+        save_dir=args.save_dir,
     )

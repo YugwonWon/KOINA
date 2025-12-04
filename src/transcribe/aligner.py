@@ -38,8 +38,9 @@ class MFAAligner:
         self.dict_path = dict_path
         self.model = model
         self.config = None
-        self.njobs = 4
+        self.njobs = 20
         self.single_spk = False
+        self.mfa_path = "mfa"  # default: assume mfa is in PATH
         
         # load config from file
         self._load_config()
@@ -48,8 +49,13 @@ class MFAAligner:
         """Load configuration from a file"""
         with open(config_path, "r") as f:
             self.config = json.load(f)
-        self.njobs = self.config.get("alignment_njobs", 4)
+        self.njobs = self.config.get("alignment_njobs", 20)
         self.single_spk = self.config.get("alignment_single_spk", False)
+        self.mfa_path = self.config.get("mfa_path", "mfa")
+        self.dict_path = self.config.get("mfa_dictionary", "korean_mfa")
+        self.model = self.config.get("mfa_model", "korean_mfa")
+        # MFA conda 환경의 bin 경로 (fstcompile 등 의존성 포함)
+        self.mfa_env_bin = self.config.get("mfa_env_bin", "/home/yugwon/miniconda3/envs/mfa/bin")
     
     
     def _safe_wav(self, src: Path, dst: Path):
@@ -103,7 +109,7 @@ class MFAAligner:
             logger.info(f"[ALIGNER] {len(pairs)}개의 파일을 준비했습니다.")
             logger.info(f"[ALIGNER] MFA 배치 정렬을 시작합니다... (njobs={self.njobs}, single_spk={self.single_spk})")
             cmd = [
-                "mfa", "align", str(corpus), self.dict_path, self.model, str(out),
+                self.mfa_path, "align", str(corpus), self.dict_path, self.model, str(out),
                 "-j", str(self.njobs), "--clean",
                 "--verbose", "--disable_tqdm"          # ← 진행 단계 텍스트 출력
             ]
@@ -112,6 +118,10 @@ class MFAAligner:
 
             logger.info("[ALIGNER] MFA command: %s", " ".join(map(str, cmd)))
 
+            # MFA conda 환경의 PATH를 포함한 환경변수 설정
+            env = os.environ.copy()
+            env["PATH"] = f"{self.mfa_env_bin}:{env.get('PATH', '')}"
+
             # ───── subprocess.run → Popen 스트리밍 ─────
             self.proc = subprocess.Popen(
                 cmd,
@@ -119,7 +129,8 @@ class MFAAligner:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 bufsize=1,
-                preexec_fn=os.setsid
+                preexec_fn=os.setsid,
+                env=env
             )
             with self.proc.stdout:
                 for line in self.proc.stdout:
@@ -157,7 +168,7 @@ class MFAAligner:
 
             # 2. run MFA
             subprocess.run([
-                "mfa", "align", corpus_dir, self.dict_path, self.model, out_dir,
+                self.mfa_path, "align", corpus_dir, self.dict_path, self.model, out_dir,
                 "-j", str(self.njobs), "--clean", "--quiet"
             ], check=True)
 
