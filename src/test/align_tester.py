@@ -8,8 +8,8 @@ from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
 # JSON 및 TextGrid 파일의 루트 경로 설정
-json_root = "/home/yugwon/nas/audio/ASR/free2022/NIKL_DIALOGUE_2022"
-textgrid_root = "/home/yugwon/nas/audio/ASR/free2022"
+json_root = os.environ.get("ASR_JSON_ROOT", "data/ASR/free2022/NIKL_DIALOGUE_2022")
+textgrid_root = os.environ.get("ASR_TEXTGRID_ROOT", "data/ASR/free2022")
 
 # TextGrid에서 첫 어절 시작(Xmin)과 마지막 어절 종료(Xmax) 찾고, 문장 생성
 def parse_textgrid(file_path):

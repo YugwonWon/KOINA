@@ -11,8 +11,8 @@ json_pkl_path = "json_file_list.pkl"
 tg_pkl_path = "tg_file_list.pkl"
 
 # JSON 및 TextGrid 파일 경로 설정
-json_root = "/home/yugwon/nas/audio/ASR/dialect1/01-1.정식개방데이터/Training/02.라벨링데이터"
-textgrid_root = "/home/yugwon/nas/audio/ASR/dialect1/01-1.정식개방데이터/Training"
+json_root = os.environ.get("DIALECT_JSON_ROOT", "data/ASR/dialect1/Training/02.라벨링데이터")
+textgrid_root = os.environ.get("DIALECT_TEXTGRID_ROOT", "data/ASR/dialect1/Training")
 
 # 허용 오차 (tolerance) 설정 (ms 단위)
 tolerance_levels = [10, 25, 50, 100]

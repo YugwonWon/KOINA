@@ -35,12 +35,15 @@ class TranscriptionRunner:
         
         # config에서 n_jobs 읽기
         config = load_config()
-        n_jobs = config.get("transcriber_n_jobs", 20)
+        n_jobs = config.get("transcriber_n_jobs", 4)
+        wav_root_dir = config.get("wav_root_dir", "data/source-audio")
+        save_dir = config.get("save_dir", "out/results")
 
         def run():
             try:
                 logger.info("[FRONT] 작업 시작!")
-                process_files(tsv_file, output_dir, self.stop_flag, runner=self, n_jobs=n_jobs)
+                process_files(tsv_file, output_dir, self.stop_flag, runner=self,
+                              n_jobs=n_jobs, wav_root_dir=wav_root_dir, save_dir=save_dir)
                 if self.stop_flag.is_set():
                     logger.info("[FRONT] 작업이 중단되었습니다.")
                 else:
@@ -184,6 +187,8 @@ def create_gradio_interface():
         "alignment_njobs": 4,
         "alignment_single_spk": False,
         "transcriber_n_jobs": 4,
+        "wav_root_dir": "data/source-audio",
+        "save_dir": "out/results",
     }
 
     with gr.Blocks(css=".custom-box {margin-top: 20px;}") as main:
@@ -331,6 +336,8 @@ def create_gradio_interface():
                     "alignment_njobs": validate_and_convert(njobs, default_config["alignment_njobs"], int, "MFA 정렬 병렬 작업 수"),
                     "alignment_single_spk": validate_and_convert(single_spk, default_config["alignment_single_spk"], bool, "단일 화자 모드"),
                     "transcriber_n_jobs": validate_and_convert(transcriber_n_jobs_val, default_config["transcriber_n_jobs"], int, "억양 전사 병렬 프로세스 수"),
+                    "wav_root_dir": default_config["wav_root_dir"],
+                    "save_dir": default_config["save_dir"],
                 }
                 if use_gender_range_val:
                     config["min_pitch_male"] = float(M_min_val) if M_min_val else 75.0

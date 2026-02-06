@@ -6,6 +6,10 @@ out/
 *.model
 .DS_Store
 
+# 실행 로그 / 출력물
+nohup*.out
+analysis_output/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

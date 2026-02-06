@@ -1108,8 +1108,8 @@ def _process_single_file(task):
 
 
 def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_path=MOMEL_PATH,
-                  wav_root_dir: str = "/data3/yugwon/auto-trans-k-intonation/data/splitted",
-                  save_dir: str = "out/processed-style",
+                  wav_root_dir: str = "data/source-audio",
+                  save_dir: str = "out/results",
                   n_jobs: int = 4):
     """
     TSV 파일을 읽어 전체 파일 목록에 대해 MFA 배치 정렬을 먼저 수행하고,
@@ -1123,7 +1123,7 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_
         momel_path: Momel 경로
         wav_root_dir: WAV 파일이 있는 디렉토리 경로
         save_dir: 결과 파일이 저장될 디렉토리 경로
-        n_jobs: 병렬 처리할 프로세스 수 (기본값: 20)
+        n_jobs: 병렬 처리할 프로세스 수 (기본값: 4)
     """
     import multiprocessing as mp
     from functools import partial
@@ -1296,9 +1296,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="억양 자동 주석 도구 (TSV 입력)")
     parser.add_argument("tsv_file", type=str, nargs='?', default="data/133_parsed_output_sample.tsv",
                         help="입력 TSV 파일 경로 (wavfile_path와 text 컬럼 포함)")
-    parser.add_argument("--wav_root_dir", type=str, default='/data3/yugwon/auto-trans-k-intonation/data/splitted',
+    parser.add_argument("--wav_root_dir", type=str, default='data/source-audio',
                         help="WAV 파일이 있는 디렉토리 경로")
-    parser.add_argument("--save_dir", type=str, default='out/processed-style',
+    parser.add_argument("--save_dir", type=str, default='out/results',
                         help="출력 TextGrid 파일들이 저장될 디렉토리 경로")
     parser.add_argument("--n_jobs", type=int, default=4,
                         help="병렬 처리할 프로세스 수 (기본값: 4)")

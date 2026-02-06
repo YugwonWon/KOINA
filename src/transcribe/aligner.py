@@ -56,7 +56,12 @@ class MFAAligner:
         self.dict_path = self.config.get("mfa_dictionary", "korean_mfa")
         self.model = self.config.get("mfa_model", "korean_mfa")
         # MFA conda 환경의 bin 경로 (fstcompile 등 의존성 포함)
-        self.mfa_env_bin = self.config.get("mfa_env_bin", "/home/yugwon/miniconda3/envs/mfa/bin")
+        # config에 없으면 mfa 실행파일 위치에서 자동 탐지, 그래도 없으면 빈 문자열
+        default_env_bin = ""
+        mfa_which = shutil.which(self.mfa_path)
+        if mfa_which:
+            default_env_bin = str(Path(mfa_which).resolve().parent)
+        self.mfa_env_bin = self.config.get("mfa_env_bin", default_env_bin)
     
     
     def _safe_wav(self, src: Path, dst: Path):

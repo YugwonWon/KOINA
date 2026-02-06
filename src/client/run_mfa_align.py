@@ -13,7 +13,7 @@ import re
 
 # ==== 사용자 설정 ====
 tsv_path   = Path("test-data/dialect_output.tsv")      # dialect_output.tsv 위치
-source_dir = Path("/home/yugwon/nas/audio/ASR/dialect1/01-1.정식개방데이터/Training/01.원천데이터")
+source_dir = Path(os.environ.get("DIALECT_DATA_DIR", "data/dialect"))
 corpus_dir = Path("dialect_corpus")                   # 임시 코퍼스 디렉터리
 cache_path = Path("wav_index.pkl")          # 인덱스 캐시
 dict_path  = Path("korean_mfa")                  # MFA용 발음 사전 (.dict)
