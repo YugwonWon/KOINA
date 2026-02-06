@@ -5,6 +5,7 @@ import json
 import os, signal, shutil
 from pathlib import Path
 import subprocess, tempfile, uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import soundfile as sf
 from textgrid import TextGrid
 from utils.ipa2kr import ipa2kr
@@ -38,9 +39,9 @@ class MFAAligner:
         self.dict_path = dict_path
         self.model = model
         self.config = None
-        self.njobs = 20
         self.single_spk = False
         self.mfa_path = "mfa"  # default: assume mfa is in PATH
+        self.njobs = 4  # 일반 PC 기준 기본값
         
         # load config from file
         self._load_config()
@@ -49,7 +50,7 @@ class MFAAligner:
         """Load configuration from a file"""
         with open(config_path, "r") as f:
             self.config = json.load(f)
-        self.njobs = self.config.get("alignment_njobs", 20)
+        self.njobs = self.config.get("alignment_njobs", 4)
         self.single_spk = self.config.get("alignment_single_spk", False)
         self.mfa_path = self.config.get("mfa_path", "mfa")
         self.dict_path = self.config.get("mfa_dictionary", "korean_mfa")
@@ -59,10 +60,11 @@ class MFAAligner:
     
     
     def _safe_wav(self, src: Path, dst: Path):
-        """libsndfile 로 열리지 않는 WAV 는 ffmpeg 로 변환"""
+        """libsndfile 로 열리지 않는 WAV 는 ffmpeg 로 변환, 정상이면 복사"""
         try:
             with sf.SoundFile(src) as _:
-                dst.symlink_to(src)       # 통과 → 심볼릭 링크 유지
+                # 정상 WAV → 단순 복사 (symlink 대신)
+                shutil.copy2(src, dst)
         except Exception:
             logger.warning(f"[ALIGNER] wav 파일 libsndfile 오류, [convert] {src.name} -> PCM 16 kHz")
             cmd = ['ffmpeg', '-y', '-i', str(src), *PCM_ARGS, str(dst)]
@@ -83,6 +85,22 @@ class MFAAligner:
         except ProcessLookupError:
             pass
         
+    def _prepare_single_file(self, args):
+        """단일 파일 준비 (멀티스레딩용 워커)"""
+        wav, txt, corpus = args
+        try:
+            src = Path(wav).resolve()
+            speaker = src.parent.name
+            rel_path = Path(speaker) / src.name
+            dst = corpus / rel_path
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            
+            self._safe_wav(src, dst)
+            (dst.with_suffix(".lab")).write_text(txt, 'utf-8')
+            return (True, src.name, None)
+        except Exception as e:
+            return (False, Path(wav).name, str(e))
+    
     def align_batch(self, pairs, stop_flag=None):
         """
         Aligns a batch of audio files with their transcriptions.
@@ -96,17 +114,27 @@ class MFAAligner:
             corpus = Path(tmp) / "corpus"; corpus.mkdir()
             out    = Path(tmp) / "out"   ; out.mkdir()
 
-            for wav, txt in pairs:
-                src = Path(wav).resolve()                # /mount/spk2/hello.wav
-                speaker = src.parent.name                # "spk2"
-                rel_path = Path(speaker) / src.name      # Path("spk2/hello.wav")
-                dst = corpus / rel_path                  # /tmp/.../corpus/spk2/hello.wav
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                
-                shutil.copy2(src, dst)
-                self._safe_wav(src, dst)
-                (dst.with_suffix(".lab")).write_text(txt, 'utf-8')
-            logger.info(f"[ALIGNER] {len(pairs)}개의 파일을 준비했습니다.")
+            # ───── 멀티스레딩으로 파일 준비 (I/O 바운드 작업) ─────
+            logger.info(f"[ALIGNER] {len(pairs)}개의 파일을 병렬로 준비합니다... (workers={self.njobs})")
+            tasks = [(wav, txt, corpus) for wav, txt in pairs]
+            
+            success_count = 0
+            error_count = 0
+            with ThreadPoolExecutor(max_workers=self.njobs) as executor:
+                futures = {executor.submit(self._prepare_single_file, task): task for task in tasks}
+                for future in as_completed(futures):
+                    if stop_flag is not None and stop_flag.is_set():
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        raise RuntimeError("File preparation cancelled by user")
+                    
+                    success, filename, error = future.result()
+                    if success:
+                        success_count += 1
+                    else:
+                        error_count += 1
+                        logger.warning(f"[ALIGNER] 파일 준비 실패: {filename} - {error}")
+            
+            logger.info(f"[ALIGNER] 파일 준비 완료: 성공 {success_count}개, 실패 {error_count}개")
             logger.info(f"[ALIGNER] MFA 배치 정렬을 시작합니다... (njobs={self.njobs}, single_spk={self.single_spk})")
             cmd = [
                 self.mfa_path, "align", str(corpus), self.dict_path, self.model, str(out),

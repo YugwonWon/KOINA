@@ -1053,12 +1053,67 @@ class IntonationTranscriber:
             logger.error(traceback.format_exc())
             return
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 멀티프로세싱을 위한 전역 변수 및 워커 함수
+# ─────────────────────────────────────────────────────────────────────────────
+_worker_settings = None
+_worker_momel_path = None
+
+def _init_worker(settings, momel_path):
+    """
+    멀티프로세싱 워커 초기화 함수.
+    각 워커 프로세스가 시작될 때 한 번 호출됩니다.
+    """
+    global _worker_settings, _worker_momel_path
+    _worker_settings = settings
+    _worker_momel_path = momel_path
+    # matplotlib 백엔드를 Agg로 설정 (GUI 없이 이미지 생성)
+    import matplotlib
+    matplotlib.use('Agg')
+
+
+def _process_single_file(task):
+    """
+    단일 파일을 처리하는 워커 함수.
+    멀티프로세싱 Pool에서 호출됩니다.
+    
+    Args:
+        task: (info_dict, alignment_dict) 튜플
+            - info_dict: wav_path, sex, output_textgrid, transcript 정보
+            - alignment_dict: MFA 정렬 결과 (words, phonemes 등)
+    
+    Returns:
+        tuple: (success: bool, wav_path: str, error_msg: str or None)
+    """
+    global _worker_settings, _worker_momel_path
+    
+    info, alignment = task
+    wav_path = info["wav_path"]
+    
+    try:
+        transcriber = IntonationTranscriber(
+            wav_file=str(wav_path),
+            transcript=info["transcript"],
+            sex=info["sex"],
+            output_textgrid=info["output_textgrid"],
+            settings=_worker_settings,
+            momel_path=_worker_momel_path
+        )
+        transcriber.alignment = alignment
+        transcriber.run()
+        return (True, wav_path, None)
+    except Exception as e:
+        return (False, wav_path, f"{e}\n{traceback.format_exc()}")
+
+
 def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_path=MOMEL_PATH,
                   wav_root_dir: str = "/data3/yugwon/auto-trans-k-intonation/data/splitted",
-                  save_dir: str = "out/processed-style"):
+                  save_dir: str = "out/processed-style",
+                  n_jobs: int = 4):
     """
     TSV 파일을 읽어 전체 파일 목록에 대해 MFA 배치 정렬을 먼저 수행하고,
-    각 정렬 결과를 IntonationTranscriber에 전달하여 후속 처리를 진행합니다.
+    각 정렬 결과를 IntonationTranscriber에 전달하여 멀티프로세싱으로 병렬 처리합니다.
     
     Args:
         tsv_file: 입력 TSV 파일 경로
@@ -1068,10 +1123,15 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_
         momel_path: Momel 경로
         wav_root_dir: WAV 파일이 있는 디렉토리 경로
         save_dir: 결과 파일이 저장될 디렉토리 경로
+        n_jobs: 병렬 처리할 프로세스 수 (기본값: 20)
     """
+    import multiprocessing as mp
+    from functools import partial
+    
     logger.info(f"[FILE] 입력 파일을 처리합니다: {os.path.basename(tsv_file)}")
     logger.info(f"[FILE] WAV 파일 경로: {wav_root_dir}")
     logger.info(f"[FILE] 저장 경로: {save_dir}")
+    logger.info(f"[FILE] 병렬 처리 프로세스 수: {n_jobs}")
     os.makedirs(save_dir, exist_ok=True)
     settings = IntonationTranscriber.load_config(config_path=CONFIG_PATH, momel_path=momel_path)
     
@@ -1116,6 +1176,8 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_
         logger.info("[FILE] 처리할 파일이 없습니다")
         return
 
+    logger.info(f"[FILE] 총 {len(pairs)}개 파일 준비 완료")
+
     aligner = MFAAligner()
     
     if runner is not None:
@@ -1131,60 +1193,101 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_
         # 작업이 끝났거나 예외가 나도 cleanup 작업을 수행합니다.
         if runner is not None:
             runner.current_aligner = None
-            
-    
-    total = len(info_list)
-    LOG_EVERY = 5
-    # 배치 정렬 결과(grid_dict)는 파일명(stem)을 key로 함
-    with tqdm_logging_redirect(logger):
-        for idx, info in enumerate(
-                    tqdm(info_list, desc="Transcribing",
-                        unit="file", ascii=True,
-                        mininterval=1.0, dynamic_ncols=False),
-                    start=1):
-            
-            if stop_flag.is_set():
-                logger.info("[RUN] 처리 중지 요청이 감지되어 작업을 중단합니다")
-                break
-            if idx == 1 or idx % LOG_EVERY == 0 or idx == total:
-                pct = 100 * idx / total
-                logger.info(f"[PROGRESS] {idx}/{total} ({pct:5.1f} %)")
-                
-            wav_path = Path(info["wav_path"]).expanduser().resolve()
-            base     = wav_path.stem
-            output_textgrid = info["output_textgrid"]
-            sex = info["sex"]
-            tg       = grid_dict.get(base)
-            
-            # MFA 정렬 결과가 없으면 건너뛰기
-            if tg is None:
-                logger.warning(f"[RUN] MFA 정렬 결과 없음 (건너뜀): {wav_path}")
-                continue
-                
-            # IntonationTranscriber 생성 시 미리 정렬 결과를 전달합니다.
-            transcriber = IntonationTranscriber(
-                wav_file=str(wav_path),
-                transcript=info["transcript"],
-                sex=sex,
-                output_textgrid=output_textgrid,
-                settings=settings,
-                momel_path=momel_path
-            )
-            # MFAAligner에서 얻은 TextGrid 정렬 결과를 주입
-            transcriber.alignment = tg_to_alignment(tg, info["transcript"])
-
-            logger.info(f"[RUN] 처리 중: {wav_path}")
-            try:
-                transcriber.run()
-            except Exception as e:
-                logger.error(f"[RUN] 오류 건너뜀: {wav_path}")
-                logger.error(traceback.format_exc())
-                continue
     
     if stop_flag.is_set():
+        logger.info("[RUN] 처리 중지 요청이 감지되어 작업을 중단합니다")
         return
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # 멀티프로세싱을 위한 태스크 준비
+    # ─────────────────────────────────────────────────────────────────────────
+    tasks = []
+    skipped_count = 0
+    for info in info_list:
+        wav_path = Path(info["wav_path"]).expanduser().resolve()
+        base = wav_path.stem
+        tg = grid_dict.get(base)
+        
+        if tg is None:
+            logger.warning(f"[RUN] MFA 정렬 결과 없음 (건너뜀): {wav_path}")
+            skipped_count += 1
+            continue
+        
+        # TextGrid를 alignment dict로 변환
+        alignment = tg_to_alignment(tg, info["transcript"])
+        tasks.append((info, alignment))
+    
+    if skipped_count > 0:
+        logger.warning(f"[RUN] MFA 정렬 결과 없음으로 건너뛴 파일: {skipped_count}개")
+    
+    if not tasks:
+        logger.info("[FILE] 처리할 태스크가 없습니다")
+        return
+    
+    total = len(tasks)
+    logger.info(f"[RUN] {total}개 파일에 대해 {n_jobs}개 프로세스로 병렬 처리를 시작합니다...")
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # 멀티프로세싱 Pool 실행
+    # ─────────────────────────────────────────────────────────────────────────
+    success_count = 0
+    error_count = 0
+    LOG_EVERY = max(1, total // 100)  # 1% 마다 로그 출력
+    
+    # spawn 방식 사용 (fork 대신) - 더 안전한 멀티프로세싱
+    ctx = mp.get_context('spawn')
+    
+    try:
+        with ctx.Pool(
+            processes=n_jobs,
+            initializer=_init_worker,
+            initargs=(settings, momel_path)
+        ) as pool:
+            # imap_unordered: 완료되는 순서대로 결과 반환 (순서 보장 X, 속도 우선)
+            results = pool.imap_unordered(_process_single_file, tasks, chunksize=10)
+            
+            with tqdm_logging_redirect(logger):
+                for idx, result in enumerate(
+                    tqdm(results, total=total, desc="Transcribing",
+                         unit="file", ascii=True,
+                         mininterval=1.0, dynamic_ncols=False),
+                    start=1
+                ):
+                    success, wav_path, error_msg = result
+                    
+                    if success:
+                        success_count += 1
+                    else:
+                        error_count += 1
+                        logger.error(f"[RUN] 오류 발생: {wav_path}")
+                        logger.error(error_msg)
+                    
+                    # 진행률 로그
+                    if idx == 1 or idx % LOG_EVERY == 0 or idx == total:
+                        pct = 100 * idx / total
+                        logger.info(f"[PROGRESS] {idx}/{total} ({pct:5.1f}%) - 성공: {success_count}, 실패: {error_count}")
+                    
+                    # 중지 플래그 체크
+                    if stop_flag.is_set():
+                        logger.info("[RUN] 처리 중지 요청이 감지되어 작업을 중단합니다")
+                        pool.terminate()
+                        break
+                        
+    except KeyboardInterrupt:
+        logger.info("[RUN] 키보드 인터럽트로 작업을 중단합니다")
+        return
+    except Exception as e:
+        logger.error(f"[RUN] 멀티프로세싱 중 오류 발생: {e}")
+        logger.error(traceback.format_exc())
+        return
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # 결과 요약
+    # ─────────────────────────────────────────────────────────────────────────
+    if stop_flag.is_set():
+        logger.info(f"[RUN] 작업이 중단되었습니다. 처리 완료: {success_count}, 실패: {error_count}")
     else:
-        logger.info("[RUN] 모든 파일 처리가 완료되었습니다")
+        logger.info(f"[RUN] 모든 파일 처리가 완료되었습니다. 성공: {success_count}, 실패: {error_count}, 건너뜀: {skipped_count}")
 
 if __name__ == '__main__':
     import argparse
@@ -1197,6 +1300,8 @@ if __name__ == '__main__':
                         help="WAV 파일이 있는 디렉토리 경로")
     parser.add_argument("--save_dir", type=str, default='out/processed-style',
                         help="출력 TextGrid 파일들이 저장될 디렉토리 경로")
+    parser.add_argument("--n_jobs", type=int, default=4,
+                        help="병렬 처리할 프로세스 수 (기본값: 4)")
 
     args = parser.parse_args()
 
@@ -1210,4 +1315,5 @@ if __name__ == '__main__':
         runner=None,
         wav_root_dir=args.wav_root_dir,
         save_dir=args.save_dir,
+        n_jobs=args.n_jobs,
     )
