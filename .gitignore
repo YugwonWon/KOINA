@@ -9,6 +9,9 @@ out/
 # 실행 로그 / 출력물
 nohup*.out
 analysis_output/
+*.csv
+*.pkl
+*.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
