@@ -87,6 +87,13 @@ class IntonationTranscriber:
                 config["sil_thresh"] = -25.0
                 config["momel_parameters"] = "30 60 750 1.01 20 5 0.05"
                 config["momel_path"] = momel_path
+                # 성별별 pitch 기본값 보장
+                config.setdefault("min_pitch", 75)
+                config.setdefault("max_pitch", 600)
+                config.setdefault("min_pitch_male", 75)
+                config.setdefault("max_pitch_male", 600)
+                config.setdefault("min_pitch_female", 75)
+                config.setdefault("max_pitch_female", 600)
                 return config
         logger.warning(f"Config 파일이 없습니다. 기본값을 사용합니다.")
         return {
@@ -160,13 +167,13 @@ class IntonationTranscriber:
         local_min_pitch = self.settings["min_pitch"]
         local_max_pitch = self.settings["max_pitch"]
 
-        # 성별 정보가 있다면, 해당 정보를 우선 적용
+        # 성별 정보가 있다면, 해당 정보를 우선 적용 (키가 없으면 기본값 유지)
         if sex in {"M", "m", "male", "man", "boy", "남성", "남", "남자"}:
-            local_min_pitch = self.settings["min_pitch_male"]
-            local_max_pitch = self.settings["max_pitch_male"]
+            local_min_pitch = self.settings.get("min_pitch_male", local_min_pitch)
+            local_max_pitch = self.settings.get("max_pitch_male", local_max_pitch)
         elif sex in {"F", "f", "female", "woman", "girl", "여성", "여", "여자"}:
-            local_min_pitch = self.settings["min_pitch_female"]
-            local_max_pitch = self.settings["max_pitch_female"]
+            local_min_pitch = self.settings.get("min_pitch_female", local_min_pitch)
+            local_max_pitch = self.settings.get("max_pitch_female", local_max_pitch)
 
         # logger.info(
         #     f"[extract_pitch] sex={sex}, "
