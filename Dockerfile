@@ -58,13 +58,13 @@ RUN ${CONDA_DIR}/bin/conda config --set auto_activate_base false && \
     ${CONDA_DIR}/bin/conda create -y -n mfa python=3.10 && \
     ${CONDA_DIR}/bin/conda run -n mfa pip install --upgrade pip
 
-# MFA 설치 (단독 — 의존성이 무거우므로 분리)
-RUN ${CONDA_DIR}/bin/conda run -n mfa conda install -y \
+# MFA 설치 (단독 — conda run 없이 직접 -n 지정으로 메모리 절약)
+RUN ${CONDA_DIR}/bin/conda install -n mfa -y \
         montreal-forced-aligner==3.2.1 && \
     ${CONDA_DIR}/bin/conda clean -afy
 
 # 나머지 conda 패키지 설치
-RUN ${CONDA_DIR}/bin/conda run -n mfa conda install -y \
+RUN ${CONDA_DIR}/bin/conda install -n mfa -y \
         numpy pandas scipy matplotlib tqdm \
         textgrid pydub ffmpeg-python && \
     ${CONDA_DIR}/bin/conda clean -afy
