@@ -21,7 +21,7 @@ from parselmouth.praat import call
 
 from textgrid import TextGrid, IntervalTier, PointTier
 
-from utils.file_ops import collect_wav_files, detect_delimiter
+from utils.file_ops import collect_wav_files, detect_delimiter, ensure_wav, SUPPORTED_AUDIO_EXTENSIONS
 from transcribe.aligner import MFAAligner, tg_to_alignment
 from pathlib import Path
 # 자식 로거 설정
@@ -1149,13 +1149,22 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_
                     logger.info("[RUN] 처리 중지 요청이 감지되어 작업을 중단합니다")
                     return
                 wav_file_name = row.get("filename", "").strip()
-                wav_file_name = f"{wav_file_name}.wav"
+                # 확장자가 없으면 .wav를 붙여서 검색
+                file_ext = os.path.splitext(wav_file_name)[1].lower()
+                if file_ext not in SUPPORTED_AUDIO_EXTENSIONS:
+                    wav_file_name = f"{wav_file_name}.wav"
                 transcript = row.get("text", "")
                 sex = row.get("sex", "")
                 if wav_file_name not in wav_dict:
-                    logger.warning(f"[FILE] WAV 파일을 찾을 수 없습니다: {wav_file_name}")
+                    logger.warning(f"[FILE] 오디오 파일을 찾을 수 없습니다: {wav_file_name}")
                     continue
                 wav_file_path = wav_dict[wav_file_name]
+                # WAV가 아닌 오디오 파일은 WAV로 변환
+                try:
+                    wav_file_path = ensure_wav(wav_file_path)
+                except Exception as e:
+                    logger.error(f"[FILE] 오디오 변환 실패, 건너뜁니다: {wav_file_name} ({e})")
+                    continue
                 base_name = os.path.splitext(os.path.basename(wav_file_path))[0]
                 # 출력 디렉토리 생성 (save_dir 사용)
                 out_subdir = f"{save_dir}/{base_name.split('.')[0]}"

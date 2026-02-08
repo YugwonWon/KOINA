@@ -36,7 +36,7 @@ class TranscriptionRunner:
         # config에서 n_jobs 읽기
         config = load_config()
         n_jobs = config.get("transcriber_n_jobs", 4)
-        wav_root_dir = config.get("wav_root_dir", "data/source-audio")
+        wav_root_dir = config.get("wav_root_dir", "out")
         save_dir = config.get("save_dir", "out/results")
 
         def run():
@@ -187,7 +187,7 @@ def create_gradio_interface():
         "alignment_njobs": 4,
         "alignment_single_spk": False,
         "transcriber_n_jobs": 4,
-        "wav_root_dir": "data/source-audio",
+        "wav_root_dir": "out",
         "save_dir": "out/results",
     }
 
@@ -284,7 +284,7 @@ def create_gradio_interface():
             single_spk = gr.Checkbox(label="단일 화자 모드(전체 오디오를 녹음한 화자 수가 한 명인 경우)", value=default_config["alignment_single_spk"], interactive=True)
             njobs = gr.Textbox(label="MFA 정렬 병렬 작업 수", placeholder="기본값: 4", interactive=True)
         with gr.Row():
-            transcriber_n_jobs = gr.Textbox(label="억양 전사 병렬 프로세스 수(Momel 등 후처리)", placeholder="기본값: 20", interactive=True)
+            transcriber_n_jobs = gr.Textbox(label="억양 주석 병렬 프로세스 수(Momel 등 후처리)", placeholder="기본값: 4", interactive=True)
         
         # 버튼 및 상태 출력
         start_button = gr.Button("작업 시작")
@@ -335,7 +335,7 @@ def create_gradio_interface():
                     "is_only_alignment": is_only_alignment,  # 기본값은 False로 설정
                     "alignment_njobs": validate_and_convert(njobs, default_config["alignment_njobs"], int, "MFA 정렬 병렬 작업 수"),
                     "alignment_single_spk": validate_and_convert(single_spk, default_config["alignment_single_spk"], bool, "단일 화자 모드"),
-                    "transcriber_n_jobs": validate_and_convert(transcriber_n_jobs_val, default_config["transcriber_n_jobs"], int, "억양 전사 병렬 프로세스 수"),
+                    "transcriber_n_jobs": validate_and_convert(transcriber_n_jobs_val, default_config["transcriber_n_jobs"], int, "억양 주석 병렬 프로세스 수"),
                     "wav_root_dir": default_config["wav_root_dir"],
                     "save_dir": default_config["save_dir"],
                 }

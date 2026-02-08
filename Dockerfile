@@ -50,22 +50,29 @@ RUN curl -fsSL "$MF_URL" -o /tmp/miniforge.sh && \
     rm /tmp/miniforge.sh && \
     "$CONDA_DIR/bin/conda" clean -afy
 
-# MFA 전용 env 생성
+# MFA 전용 env 생성 (libmamba solver 사용으로 메모리 절약)
 RUN ${CONDA_DIR}/bin/conda config --set auto_activate_base false && \
     ${CONDA_DIR}/bin/conda config --add channels conda-forge && \
     ${CONDA_DIR}/bin/conda config --set channel_priority strict && \
+    ${CONDA_DIR}/bin/conda config --set solver libmamba && \
     ${CONDA_DIR}/bin/conda create -y -n mfa python=3.10 && \
     ${CONDA_DIR}/bin/conda run -n mfa pip install --upgrade pip
 
-# MFA + 필수 라이브러리 설치 (conda/pip 혼합)
+# MFA 설치 (단독 — 의존성이 무거우므로 분리)
 RUN ${CONDA_DIR}/bin/conda run -n mfa conda install -y \
-        montreal-forced-aligner==3.2.1 \
+        montreal-forced-aligner==3.2.1 && \
+    ${CONDA_DIR}/bin/conda clean -afy
+
+# 나머지 conda 패키지 설치
+RUN ${CONDA_DIR}/bin/conda run -n mfa conda install -y \
         numpy pandas scipy matplotlib tqdm \
         textgrid pydub ffmpeg-python && \
-    ${CONDA_DIR}/bin/conda run -n mfa pip install joblib==1.1.0 && \
-    ${CONDA_DIR}/bin/conda run -n mfa pip install gradio soundfile==0.12.1 praat-parselmouth
-RUN /opt/conda/bin/conda run -n mfa pip install \
-      python-mecab-ko jamo
+    ${CONDA_DIR}/bin/conda clean -afy
+
+# pip 패키지 설치
+RUN ${CONDA_DIR}/bin/conda run -n mfa pip install --no-cache-dir \
+        joblib==1.1.0 gradio soundfile==0.12.1 praat-parselmouth \
+        python-mecab-ko jamo
 
 ########################
 # 3. 일반 사용자 생성 + 모델 디렉터리 준비  (root)
