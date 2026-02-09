@@ -1149,7 +1149,7 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_
     info_list = []  # 각 파일에 대한 추가 정보 (예: sex, output_textgrid)
     try:
         delimiter = detect_delimiter(tsv_file)
-        with open(tsv_file, 'r', encoding='utf-8') as f:
+        with open(tsv_file, 'r', encoding='utf-8-sig') as f:
             reader = csv.DictReader(f, delimiter=delimiter)
             for row in reader:
                 if stop_flag.is_set():
