@@ -182,6 +182,7 @@ def create_gradio_interface():
         "is_synthesis_save": False,
         "is_spline_syntheis_save": False,
         "is_only_alignment": False,
+        "is_percentage_save": True,
         "fixed_y_min": 0,
         "fixed_y_max": 600,
         "alignment_njobs": 4,
@@ -270,8 +271,10 @@ def create_gradio_interface():
             is_spline_syntheis_save = gr.Checkbox(
                 label = "연결 곡선(spline) 윤곽 합성 음성 저장",
                 value = default_config["is_spline_syntheis_save"],
-                interactive = True)
-        
+                interactive = True)            is_percentage_save = gr.Checkbox(
+                label = "백분율 정규화 TextGrid 별도 저장",
+                value = default_config["is_percentage_save"],
+                interactive = True)        
         # Align Options
         gr.Markdown("### 📏 Alignment Options")
         # 음성-텍스트 정렬 옵션
@@ -306,7 +309,7 @@ def create_gradio_interface():
                         fixed_y_min, fixed_y_max,
                         use_gender_range_val,
                         M_min_val, M_max_val, F_min_val, F_max_val,
-                        is_synthesis_save, is_spline_syntheis_save,
+                        is_synthesis_save, is_spline_syntheis_save, is_percentage_save_val,
                         is_only_alignment,
                         njobs, single_spk, transcriber_n_jobs_val):
             try:
@@ -332,6 +335,7 @@ def create_gradio_interface():
                     "fixed_y_max": validate_and_convert(fixed_y_max, default_config.get("fixed_y_max", 600), float, "Y axis maximum"),
                     "is_synthesis_save": is_synthesis_save,
                     "is_spline_syntheis_save": is_spline_syntheis_save,
+                    "is_percentage_save": is_percentage_save_val,
                     "is_only_alignment": is_only_alignment,  # 기본값은 False로 설정
                     "alignment_njobs": validate_and_convert(njobs, default_config["alignment_njobs"], int, "MFA 정렬 병렬 작업 수"),
                     "alignment_single_spk": validate_and_convert(single_spk, default_config["alignment_single_spk"], bool, "단일 화자 모드"),
@@ -399,6 +403,7 @@ def create_gradio_interface():
                 use_gender_range,
                 M_min, M_max, F_min, F_max,
                 is_synthesis_save, is_spline_syntheis_save,
+                is_percentage_save,
                 is_only_alignment,
                 njobs, single_spk, transcriber_n_jobs
             ],

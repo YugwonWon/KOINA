@@ -8,7 +8,7 @@ import subprocess, tempfile, uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import soundfile as sf
 from textgrid import TextGrid
-from utils.ipa2kr import ipa2kr
+from utils.ipa2kr import ipa2kr, ipa_sequence_to_kr, build_kr_and_syllables
 
 from utils.logger import main_logger
 logger = main_logger.getChild('aligner')
@@ -268,8 +268,6 @@ def tg_to_alignment(tg: TextGrid, transcript: str) -> dict:
     Returns:
         dict: A dictionary with keys "words", "phonemes", and "phonemes_kr",
     """
-    # TODO: phonemes_kr tier는 현재 MFA에서의 G2P 모델을 개량할 수 없으므로 
-    # IPA를 한글 자모로 바꿔줄 수 있는 정교한 후처리가 필요하다. e.g. ɲʌ -> 녀(현재는 ㄴ(니), ㅓ로 변환됨)
     words, phones, phones_kr = [], [], []
 
     for tier in tg.tiers:
@@ -286,14 +284,15 @@ def tg_to_alignment(tg: TextGrid, transcript: str) -> dict:
                              "end"  : iv.maxTime,
                              "text" : iv.mark}
                 phones.append(phon_dict)
-                phones_kr.append({"start": iv.minTime,
-                                  "end"  : iv.maxTime,
-                                  "text" : ipa2kr(iv.mark)})
 
-    # 형태소 분석된 raw timestamp에서 어절 복원된 것, 이것을 기존 words로 대체하고, raw words를 words_token으로 저장
+    # 형태소 분석된 raw timestamp에서 어절 복원
     words_restore = restore_eojeols(words, transcript)
-    
+
+    # 형태 정보(word text) 기반 IPA→한글 보정 + 음절 경계 산출
+    phones_kr, syllables = build_kr_and_syllables(phones, words_restore)
+
     return {"words": words_restore,
             "phonemes": phones,
             "phonemes_kr": phones_kr,
+            "syllables": syllables,
             "words_token": words}

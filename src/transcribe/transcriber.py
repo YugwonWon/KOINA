@@ -376,10 +376,10 @@ class IntonationTranscriber:
         # word 티어 생성
         word_tier = IntervalTier(name="word", minTime=0, maxTime=self.duration)
         self.textgrid.append(word_tier)
-        
-        # word_token 티어 생성
-        word_token_tier = IntervalTier(name="word_token", minTime=0, maxTime=self.duration)
-        self.textgrid.append(word_token_tier)
+
+        # syllable 티어 생성
+        syllable_tier = IntervalTier(name="syllable", minTime=0, maxTime=self.duration)
+        self.textgrid.append(syllable_tier)
 
         # phoneme 티어 생성
         phoneme_tier = IntervalTier(name="phoneme", minTime=0, maxTime=self.duration)
@@ -391,36 +391,82 @@ class IntonationTranscriber:
         
         # alignment 데이터가 존재할 경우, word 및 phoneme 티어 채우기
         if self.alignment:
-            # word 티어 채우기
+            # word 티어 채우기 (어절 사이 빈 구간에 SP 레이블 추가)
             words = self.alignment.get('words', [])
+            prev_end = 0.0
             for word in words:
                 start = word.get('start', 0)
                 end = word.get('end', 0)
                 text = word.get('text', '')
+                # 어절 이전 빈 구간 SP 채우기
+                if start > prev_end + 0.001:
+                    word_tier.add(prev_end, min(start, word_tier.maxTime), 'SP')
+                if text == '':
+                    text = 'SP'
                 if end > word_tier.maxTime:
                     end = word_tier.maxTime
                 word_tier.add(start, end, text)
+                prev_end = end
+            # 마지막 어절 이후 빈 구간 SP
+            if prev_end < word_tier.maxTime - 0.001:
+                word_tier.add(prev_end, word_tier.maxTime, 'SP')
 
-            # phoneme 티어 채우기
+            # phoneme 티어 채우기 (빈 구간에 SP 레이블 추가)
             phonemes = self.alignment.get('phonemes', [])
             for phoneme in phonemes:
                 start = phoneme.get('start', 0)
                 end = phoneme.get('end', 0)
                 text = phoneme.get('text', '')
+                if text == '':
+                    text = 'SP'
                 if end > phoneme_tier.maxTime:
                     end = phoneme_tier.maxTime
                 phoneme_tier.add(start, end, text)
             
-            # phoneme_kr 티어 채우기
+            # phoneme_kr 티어 채우기 (빈 구간에 SP 레이블 추가)
             phonemes_kr = self.alignment.get('phonemes_kr', [])
             for phoneme in phonemes_kr:
                 start = phoneme.get('start', 0)
                 end = phoneme.get('end', 0)
                 text = phoneme.get('text', '')
+                if text == '':
+                    text = 'SP'
                 if end > phonkr_tier.maxTime:
                     end = phonkr_tier.maxTime
                 phonkr_tier.add(start, end, text)
+
+            # syllable 티어 채우기 (어절 텍스트의 음절 정보 + phoneme 타이밍 기반)
+            self._fill_syllable_tier(syllable_tier, phoneme_tier)
                 
+
+    def _fill_syllable_tier(self, syllable_tier, phoneme_tier):
+        """
+        alignment에서 사전 계산된 음절 구간(형태 정보 + phoneme timing 기반)을
+        사용하여 syllable 티어를 채웁니다.
+        음절 사이 빈 구간은 SP 레이블로 채워 IntervalTier 전체를 커버합니다.
+        """
+        syllables = self.alignment.get('syllables', [])
+        if not syllables:
+            return
+
+        prev_end = 0.0
+        for syl in syllables:
+            start = syl.get('start', 0)
+            end   = syl.get('end', 0)
+            text  = syl.get('text', '')
+
+            # 음절 사이 빈 구간에 SP 추가
+            if start > prev_end + 0.001:
+                syllable_tier.add(prev_end, min(start, syllable_tier.maxTime), 'SP')
+
+            if end > syllable_tier.maxTime:
+                end = syllable_tier.maxTime
+            syllable_tier.add(start, end, text)
+            prev_end = end
+
+        # 마지막 음절 이후 빈 구간 SP
+        if prev_end < syllable_tier.maxTime - 0.001:
+            syllable_tier.add(prev_end, syllable_tier.maxTime, 'SP')
 
     def save_textgrid(self):
         """
@@ -473,18 +519,31 @@ class IntonationTranscriber:
         else:
             logger.warning("[RUN] TCoG 계산에 실패했습니다.")
 
-    def add_percentage_points_tier(self, corrected_times, corrected_f0_values):
+    def add_percentage_points_tier(self, corrected_times, corrected_f0_values, percentage_textgrid_path):
         """
-        최종 조정된 포인트를 기반으로 Points(pct) 티어를 추가합니다.
+        최종 조정된 포인트를 기반으로 Points(pct) 티어를 별도 TextGrid 파일로 저장합니다.
+        시간축을 0~100으로 정규화하여 백분율 시간으로 표시합니다.
         """
-        percentage_points_tier = PointTier(name="Points(pct)", minTime=0, maxTime=100)
+        pct_textgrid = TextGrid()
 
+        # 원래 Points 티어를 백분율로 변환하여 추가
+        percentage_points_tier = PointTier(name="Points(pct)", minTime=0, maxTime=100)
         for time, f0 in zip(corrected_times, corrected_f0_values):
             percentage_time = (time / self.duration) * 100
             percentage_points_tier.add(percentage_time, f"{f0:.2f}")
+        pct_textgrid.append(percentage_points_tier)
 
-        self.textgrid.append(percentage_points_tier)
-        logger.info("[RUN] Points(pct) 티어가 추가되었습니다.")
+        # TCoG도 백분율로 변환하여 추가
+        pitch = self.extract_pitch(sex=self.sex)
+        tcog = self.calculate_tcog(pitch)
+        if tcog is not None:
+            pct_tcog = (tcog / self.duration) * 100
+            tcog_pct_tier = PointTier(name="TCoG(pct)", minTime=0, maxTime=100)
+            tcog_pct_tier.add(pct_tcog, "TCoG")
+            pct_textgrid.append(tcog_pct_tier)
+
+        pct_textgrid.write(percentage_textgrid_path)
+        logger.info(f"[RUN] 백분율 정규화 TextGrid가 저장되었습니다: {percentage_textgrid_path}")
 
     def simplify_pitch_points_by_slope(self, times, f0_values, slope_threshold=27):
         """
@@ -846,7 +905,7 @@ class IntonationTranscriber:
                                      minimalized_wav_path, minimalized_image_path,
                                      corrected_wav_path, corrected_image_path,
                                      spline_image_path, spline_wav_path,
-                                     percentage_image_path):
+                                     percentage_image_path, percentage_textgrid_path=None):
         """
         Momel의 Points 티어를 기반으로 첫 번째 변조를 수행하고, F0 목표점 최소화 포인트로 두 번째 변조 및 그래프를 생성합니다.
 
@@ -876,8 +935,9 @@ class IntonationTranscriber:
             if self.settings['is_synthesis_save']:
                 self.synthesize_pitch_modified_wav(minimalized_wav_path, simplified_times, simplified_f0_values)
 
-            # 최종 음높이 포인트 percentage로 저장
-            self.add_percentage_points_tier(simplified_times, simplified_f0_values)
+            # 백분율 정규화 TextGrid를 별도 파일로 저장 (옵션 선택 시)
+            if self.settings.get('is_percentage_save', True):
+                self.add_percentage_points_tier(simplified_times, simplified_f0_values, percentage_textgrid_path)
             
             # 백분율 그래프 산출
             self.plot_percentage_pitch_contour(simplified_times, simplified_f0_values, percentage_image_path)
@@ -1019,6 +1079,7 @@ class IntonationTranscriber:
         corrected_image_path = os.path.splitext(self.output_textgrid)[0] + "_corrected_doubling_halving_contour.jpg"
         spline_image_path = os.path.splitext(self.output_textgrid)[0] + "_spline_contour.jpg"
         spline_wav_path = os.path.splitext(self.output_textgrid)[0] + "_spline_contour.wav"
+        percentage_textgrid_path = os.path.splitext(self.output_textgrid)[0] + "_pct.TextGrid"
 
         # 모든 출력 파일이 존재하는 경우, 건너뜁니다.
         if (os.path.exists(self.output_textgrid) and 
@@ -1053,7 +1114,8 @@ class IntonationTranscriber:
                                             corrected_image_path=corrected_image_path,
                                             spline_image_path=spline_image_path,
                                             spline_wav_path=spline_wav_path,
-                                            percentage_image_path=output_percentage_contour)
+                                            percentage_image_path=output_percentage_contour,
+                                            percentage_textgrid_path=percentage_textgrid_path)
             self.save_textgrid()
         except Exception as e:
             logger.error(f"억양 전사 중 오류 발생: {e}")
