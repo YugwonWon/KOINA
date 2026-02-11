@@ -325,6 +325,214 @@ def _is_vowel_ipa(text):
     return text.rstrip('ː') in _VOWEL_IPA_BASE
 
 
+# ────────────────────────────────────────────────────────────────────
+# G2P(Grapheme-to-Phoneme) 기반 정렬 지원
+# ────────────────────────────────────────────────────────────────────
+
+_g2p_instance = None
+_g2p_available = None
+
+
+def _get_g2p():
+    """G2P 인스턴스를 lazy-load합니다. (g2pk2 패키지 필요)"""
+    global _g2p_instance, _g2p_available
+    if _g2p_available is None:
+        try:
+            from g2pk2 import G2p
+            _g2p_instance = G2p()
+            _g2p_available = True
+        except ImportError:
+            _g2p_available = False
+    return _g2p_instance
+
+
+# 종성 호환성 테이블: 음운변동(비음화, 중화 등)으로 인한 변이 허용
+_CODA_COMPAT = {
+    'ㄱ': {'ㄱ', 'ㅋ', 'ㄲ'},
+    'ㄷ': {'ㄷ', 'ㅌ', 'ㅅ', 'ㅆ', 'ㅈ', 'ㅊ', 'ㄸ'},
+    'ㅂ': {'ㅂ', 'ㅍ', 'ㅃ'},
+    'ㅁ': {'ㅁ'},
+    'ㄴ': {'ㄴ', 'ㄹ'},
+    'ㄹ': {'ㄹ', 'ㄴ'},
+    'ㅇ': {'ㅇ', 'ㄴ', 'ㅁ'},  # 비음 위치동화
+    'ㅎ': {'ㅎ'},
+    'ㅅ': {'ㅅ', 'ㅆ', 'ㄷ', 'ㅌ'},
+    'ㅆ': {'ㅆ', 'ㅅ', 'ㄷ', 'ㅌ'},
+}
+
+
+def _is_coda_compatible(ipa_text, expected_jamo):
+    """IPA 음소가 기대 종성 자모와 호환되는지 확인합니다."""
+    actual_kr = IPA2KR.get(ipa_text, '')
+    if actual_kr == expected_jamo:
+        return True
+    compat_set = _CODA_COMPAT.get(expected_jamo, {expected_jamo})
+    return actual_kr in compat_set
+
+
+def _g2p_align_word(w_text, word_pis, phones):
+    """
+    G2P(grapheme-to-phoneme)를 활용한 어절 단위 정렬.
+
+    발음 변환 결과의 자모를 기준으로 MFA IPA 음소와 정렬합니다.
+    연음, 비음화, 경음화, 겹받침 간소화 등 모든 음운 규칙을 자동 처리합니다.
+
+    Args:
+        w_text:    어절 텍스트 (원형)
+        word_pis:  이 어절에 속하는 phones 인덱스 리스트
+        phones:    전체 phone 리스트 [{'start', 'end', 'text'}, ...]
+
+    Returns:
+        (ok, assignments, syllables)
+        ok:          정렬 성공 여부
+        assignments: {phone_idx: kr_label} (None = 이중모음 병합 대상)
+        syllables:   [{'start', 'end', 'text'}, ...]
+    """
+    g2p = _get_g2p()
+    if g2p is None:
+        return False, None, None
+
+    from utils.jamo import (decompose_hangul, is_hangul,
+                            CHOSUNG_LIST, JUNGSEONG_LIST, JONGSEONG_LIST)
+
+    # G2P 발음 변환
+    try:
+        pron_text = g2p(w_text)
+    except Exception:
+        return False, None, None
+
+    # 한글 문자만 추출
+    orig_chars = [ch for ch in w_text if is_hangul(ch)]
+    pron_chars = [ch for ch in pron_text if is_hangul(ch)]
+
+    # 음절 수 불일치 → 실패 (fallback으로 전환)
+    if len(orig_chars) != len(pron_chars) or not pron_chars:
+        return False, None, None
+
+    # 발음형 자모 분해
+    pron_syl_specs = []
+    for ch in pron_chars:
+        cho_i, jung_i, jong_i = decompose_hangul(ch)
+        if cho_i is None:
+            pron_syl_specs.append((ch, [('other', ch)]))
+            continue
+        cho  = CHOSUNG_LIST[cho_i]
+        jung = JUNGSEONG_LIST[jung_i]
+        jong = JONGSEONG_LIST[jong_i] if jong_i > 0 else None
+
+        parts = [('onset', cho), ('nucleus', jung)]
+        if jong:
+            parts.append(('coda', jong))
+        pron_syl_specs.append((ch, parts))
+
+    # ── Greedy alignment (발음 자모 기준) ──
+    cursor = 0
+    ok = True
+    syl_result = []  # [(orig_char, [(phone_idx, kr_label)])]
+
+    for syl_idx, (pron_char, parts) in enumerate(pron_syl_specs):
+        orig_char = orig_chars[syl_idx]
+        syl_phones = []
+
+        for pos, jamo in parts:
+            # 초성 ㅇ (무음) → phone 소비 없음
+            if pos == 'onset' and jamo == 'ㅇ':
+                continue
+
+            # 초성 자음
+            if pos == 'onset':
+                if cursor >= len(word_pis):
+                    ok = False; break
+                pi = word_pis[cursor]
+                pt = phones[pi]['text']
+                if _is_vowel_ipa(pt):
+                    ok = False; break
+                syl_phones.append((pi, jamo))
+                cursor += 1
+
+            # 중성 (모음)
+            elif pos == 'nucleus':
+                glide = _DIPHTHONG_GLIDE.get(jamo)
+
+                if glide:
+                    # 이중모음
+                    if cursor >= len(word_pis):
+                        ok = False; break
+                    pi = word_pis[cursor]
+                    pt = phones[pi]['text']
+                    if not _is_vowel_ipa(pt) and pt not in _GLIDE_IPA:
+                        ok = False; break
+
+                    if pt in _GLIDE_IPA and cursor + 1 < len(word_pis):
+                        # glide + vowel → 이중모음 병합
+                        pi2 = word_pis[cursor + 1]
+                        syl_phones.append((pi, jamo))
+                        syl_phones.append((pi2, None))  # 병합 마커
+                        cursor += 2
+                    else:
+                        # 단독 vowel → 이중모음 라벨
+                        syl_phones.append((pi, jamo))
+                        cursor += 1
+                else:
+                    # 단모음
+                    if cursor >= len(word_pis):
+                        ok = False; break
+                    pi = word_pis[cursor]
+                    pt = phones[pi]['text']
+                    if not _is_vowel_ipa(pt) and pt not in _GLIDE_IPA:
+                        ok = False; break
+                    syl_phones.append((pi, jamo))
+                    cursor += 1
+
+            # 종성 (받침) — 호환성 검사 후 선택적 소비
+            elif pos == 'coda':
+                if cursor < len(word_pis):
+                    pi = word_pis[cursor]
+                    pt = phones[pi]['text']
+                    if _is_vowel_ipa(pt):
+                        pass  # 종성 탈락 (다음 phone이 모음)
+                    elif _is_coda_compatible(pt, jamo):
+                        syl_phones.append((pi, jamo))
+                        cursor += 1
+                    else:
+                        pass  # 종성 탈락/변동으로 비호환 → 건너뜀
+                # else: phone 부족 → 종성 생략
+
+            # 기타 (비한글)
+            elif pos == 'other':
+                if cursor < len(word_pis):
+                    pi = word_pis[cursor]
+                    syl_phones.append((pi, jamo))
+                    cursor += 1
+
+        if not ok:
+            break
+        syl_result.append((orig_char, syl_phones))
+
+    # 남은 phone이 있으면 정렬 실패
+    if cursor < len(word_pis):
+        ok = False
+
+    if not ok or not syl_result:
+        return False, None, None
+
+    # 결과 구성
+    assignments = {}
+    syllables = []
+    for orig_char, sp in syl_result:
+        for pi, label in sp:
+            assignments[pi] = label
+        if sp:
+            pis = [pi for pi, _ in sp]
+            syllables.append({
+                'start': phones[pis[0]]['start'],
+                'end':   phones[pis[-1]]['end'],
+                'text':  orig_char
+            })
+
+    return True, assignments, syllables
+
+
 def build_kr_and_syllables(phones, words_restored):
     """
     형태 정보(word text)를 ground truth로 삼아
@@ -367,7 +575,14 @@ def build_kr_and_syllables(phones, words_restored):
             if p['start'] >= w_start - _EPS and p['end'] <= w_end + _EPS:
                 word_pis.append(pi)
 
-        # ── 어절 텍스트 → 음절·자모 분해 ──
+        # ── G2P 기반 정렬 우선 시도 ──
+        g2p_ok, g2p_assign, g2p_syls = _g2p_align_word(w_text, word_pis, phones)
+        if g2p_ok:
+            assignment.update(g2p_assign)
+            syllables.extend(g2p_syls)
+            continue
+
+        # ── (fallback) 어절 텍스트 → 음절·자모 분해 ──
         syl_specs = []  # list of (char, [(position, jamo)])
         for ch in w_text:
             if is_hangul(ch):
