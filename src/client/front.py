@@ -271,10 +271,11 @@ def create_gradio_interface():
             is_spline_syntheis_save = gr.Checkbox(
                 label = "연결 곡선(spline) 윤곽 합성 음성 저장",
                 value = default_config["is_spline_syntheis_save"],
-                interactive = True)            is_percentage_save = gr.Checkbox(
+                interactive = True)
+            is_percentage_save = gr.Checkbox(
                 label = "백분율 정규화 TextGrid 별도 저장",
                 value = default_config["is_percentage_save"],
-                interactive = True)        
+                interactive = True)
         # Align Options
         gr.Markdown("### 📏 Alignment Options")
         # 음성-텍스트 정렬 옵션
