@@ -5,6 +5,18 @@ out/
 *.f0
 *.model
 .DS_Store
+tests/**/*.wav
+tests/**/*.TextGrid
+tests/**/*.png
+tests/**/*.jpg
+tests/**/*.tsv
+
+# 실행 로그 / 출력물
+nohup*.out
+analysis_output/
+*.csv
+*.pkl
+*.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

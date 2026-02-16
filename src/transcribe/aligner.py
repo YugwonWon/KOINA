@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import json
-import os, signal, shutil
+import os, re, signal, shutil
 from pathlib import Path
 import subprocess, tempfile, uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import soundfile as sf
 from textgrid import TextGrid
-from utils.ipa2kr import ipa2kr
+from utils.ipa2kr import ipa2kr, ipa_sequence_to_kr, build_kr_and_syllables
+
+# MFA lab 파일 및 어절 비교 시 제거할 구두점 패턴
+_PUNCT_RE = re.compile(r'[^\w\s]', re.UNICODE)
 
 from utils.logger import main_logger
 logger = main_logger.getChild('aligner')
@@ -38,8 +42,9 @@ class MFAAligner:
         self.dict_path = dict_path
         self.model = model
         self.config = None
-        self.njobs = 4
         self.single_spk = False
+        self.mfa_path = "mfa"  # default: assume mfa is in PATH
+        self.njobs = 4  # 일반 PC 기준 기본값
         
         # load config from file
         self._load_config()
@@ -50,13 +55,24 @@ class MFAAligner:
             self.config = json.load(f)
         self.njobs = self.config.get("alignment_njobs", 4)
         self.single_spk = self.config.get("alignment_single_spk", False)
+        self.mfa_path = self.config.get("mfa_path", "mfa")
+        self.dict_path = self.config.get("mfa_dictionary", "korean_mfa")
+        self.model = self.config.get("mfa_model", "korean_mfa")
+        # MFA conda 환경의 bin 경로 (fstcompile 등 의존성 포함)
+        # config에 없으면 mfa 실행파일 위치에서 자동 탐지, 그래도 없으면 빈 문자열
+        default_env_bin = ""
+        mfa_which = shutil.which(self.mfa_path)
+        if mfa_which:
+            default_env_bin = str(Path(mfa_which).resolve().parent)
+        self.mfa_env_bin = self.config.get("mfa_env_bin", default_env_bin)
     
     
     def _safe_wav(self, src: Path, dst: Path):
-        """libsndfile 로 열리지 않는 WAV 는 ffmpeg 로 변환"""
+        """libsndfile 로 열리지 않는 WAV 는 ffmpeg 로 변환, 정상이면 복사"""
         try:
             with sf.SoundFile(src) as _:
-                dst.symlink_to(src)       # 통과 → 심볼릭 링크 유지
+                # 정상 WAV → 단순 복사 (symlink 대신)
+                shutil.copy2(src, dst)
         except Exception:
             logger.warning(f"[ALIGNER] wav 파일 libsndfile 오류, [convert] {src.name} -> PCM 16 kHz")
             cmd = ['ffmpeg', '-y', '-i', str(src), *PCM_ARGS, str(dst)]
@@ -77,6 +93,26 @@ class MFAAligner:
         except ProcessLookupError:
             pass
         
+    def _prepare_single_file(self, args):
+        """단일 파일 준비 (멀티스레딩용 워커)"""
+        wav, txt, corpus = args
+        try:
+            src = Path(wav).resolve()
+            speaker = src.parent.name
+            rel_path = Path(speaker) / src.name
+            dst = corpus / rel_path
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            
+            self._safe_wav(src, dst)
+            # MFA는 구두점을 인식하지 못하므로 lab 파일에서 제거
+            lab_txt = _PUNCT_RE.sub('', txt)
+            # 구두점 제거로 생긴 연속 공백 정리
+            lab_txt = re.sub(r'\s+', ' ', lab_txt).strip()
+            (dst.with_suffix(".lab")).write_text(lab_txt, 'utf-8')
+            return (True, src.name, None)
+        except Exception as e:
+            return (False, Path(wav).name, str(e))
+    
     def align_batch(self, pairs, stop_flag=None):
         """
         Aligns a batch of audio files with their transcriptions.
@@ -90,20 +126,30 @@ class MFAAligner:
             corpus = Path(tmp) / "corpus"; corpus.mkdir()
             out    = Path(tmp) / "out"   ; out.mkdir()
 
-            for wav, txt in pairs:
-                src = Path(wav).resolve()                # /mount/spk2/hello.wav
-                speaker = src.parent.name                # "spk2"
-                rel_path = Path(speaker) / src.name      # Path("spk2/hello.wav")
-                dst = corpus / rel_path                  # /tmp/.../corpus/spk2/hello.wav
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                
-                shutil.copy2(src, dst)
-                self._safe_wav(src, dst)
-                (dst.with_suffix(".lab")).write_text(txt, 'utf-8')
-            logger.info(f"[ALIGNER] {len(pairs)}개의 파일을 준비했습니다.")
+            # ───── 멀티스레딩으로 파일 준비 (I/O 바운드 작업) ─────
+            logger.info(f"[ALIGNER] {len(pairs)}개의 파일을 병렬로 준비합니다... (workers={self.njobs})")
+            tasks = [(wav, txt, corpus) for wav, txt in pairs]
+            
+            success_count = 0
+            error_count = 0
+            with ThreadPoolExecutor(max_workers=self.njobs) as executor:
+                futures = {executor.submit(self._prepare_single_file, task): task for task in tasks}
+                for future in as_completed(futures):
+                    if stop_flag is not None and stop_flag.is_set():
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        raise RuntimeError("File preparation cancelled by user")
+                    
+                    success, filename, error = future.result()
+                    if success:
+                        success_count += 1
+                    else:
+                        error_count += 1
+                        logger.warning(f"[ALIGNER] 파일 준비 실패: {filename} - {error}")
+            
+            logger.info(f"[ALIGNER] 파일 준비 완료: 성공 {success_count}개, 실패 {error_count}개")
             logger.info(f"[ALIGNER] MFA 배치 정렬을 시작합니다... (njobs={self.njobs}, single_spk={self.single_spk})")
             cmd = [
-                "mfa", "align", str(corpus), self.dict_path, self.model, str(out),
+                self.mfa_path, "align", str(corpus), self.dict_path, self.model, str(out),
                 "-j", str(self.njobs), "--clean",
                 "--verbose", "--disable_tqdm"          # ← 진행 단계 텍스트 출력
             ]
@@ -112,6 +158,10 @@ class MFAAligner:
 
             logger.info("[ALIGNER] MFA command: %s", " ".join(map(str, cmd)))
 
+            # MFA conda 환경의 PATH를 포함한 환경변수 설정
+            env = os.environ.copy()
+            env["PATH"] = f"{self.mfa_env_bin}:{env.get('PATH', '')}"
+
             # ───── subprocess.run → Popen 스트리밍 ─────
             self.proc = subprocess.Popen(
                 cmd,
@@ -119,7 +169,8 @@ class MFAAligner:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 bufsize=1,
-                preexec_fn=os.setsid
+                preexec_fn=os.setsid,
+                env=env
             )
             with self.proc.stdout:
                 for line in self.proc.stdout:
@@ -157,7 +208,7 @@ class MFAAligner:
 
             # 2. run MFA
             subprocess.run([
-                "mfa", "align", corpus_dir, self.dict_path, self.model, out_dir,
+                self.mfa_path, "align", corpus_dir, self.dict_path, self.model, out_dir,
                 "-j", str(self.njobs), "--clean", "--quiet"
             ], check=True)
 
@@ -179,38 +230,43 @@ class MFAAligner:
 
             return {"words": words, "phonemes": phonemes}
 
+def _strip_punct(s):
+    """비교용: 구두점을 제거한 문자열 반환"""
+    return _PUNCT_RE.sub('', s)
+
+
 def restore_eojeols(word_ivls, transcript):
     """
-    MFA word intervals → transcript 의 공백 토큰 순서에 맞춰 ‘어절’ 복원
+    MFA word intervals → transcript 의 공백 토큰 순서에 맞춰 '어절' 복원
     * 침묵 interval(text=="")은 start/end 계산에는 포함하지만
       토큰 결합·비교에는 완전히 무시
+    * 비교 시 구두점(쉼표, 마침표 등)을 무시하여 MFA 출력과 매칭
     """
-    tokens = transcript.strip().split()        # ['나는', '실력있는', …]
-    tok_idx = 0                                # 다음에 만들어야 할 어절 index
+    tokens = transcript.strip().split()
+    # 비교용 구두점 제거 토큰 (출력은 원본 tokens 사용)
+    tokens_clean = [_strip_punct(t) for t in tokens]
+    tok_idx = 0
     buf_txt, buf_start, buf_end = "", None, None
     out = []
 
     for iv in word_ivls:
-        # 침묵 interval → 길이만 end 로 확장, 내용 결합은 skip
         if iv["text"] == "":
             if buf_start is not None:
                 buf_end = iv["end"]
             continue
 
-        # 첫 실음절 interval이면 start 기록
         if buf_start is None:
             buf_start = iv["start"]
 
         buf_end = iv["end"]
-        buf_txt += iv["text"]                  # 공백 없는 순수 음절 / 어절 이어붙이기
+        buf_txt += iv["text"]
 
-        # 현재 버퍼가 목표 token 과 일치하면 flush
-        if tok_idx < len(tokens) and buf_txt == tokens[tok_idx]:
-            out.append({"start": buf_start, "end": buf_end, "text": buf_txt})
+        # 구두점 무시 비교
+        if tok_idx < len(tokens) and buf_txt == tokens_clean[tok_idx]:
+            out.append({"start": buf_start, "end": buf_end, "text": tokens_clean[tok_idx]})
             tok_idx += 1
-            buf_txt, buf_start = "", None      # 버퍼 초기화
+            buf_txt, buf_start = "", None
 
-    # 남은 버퍼(끝이 무음으로 끝나는 경우) 처리
     if buf_start is not None:
         out.append({"start": buf_start, "end": buf_end, "text": buf_txt})
 
@@ -224,8 +280,6 @@ def tg_to_alignment(tg: TextGrid, transcript: str) -> dict:
     Returns:
         dict: A dictionary with keys "words", "phonemes", and "phonemes_kr",
     """
-    # TODO: phonemes_kr tier는 현재 MFA에서의 G2P 모델을 개량할 수 없으므로 
-    # IPA를 한글 자모로 바꿔줄 수 있는 정교한 후처리가 필요하다. e.g. ɲʌ -> 녀(현재는 ㄴ(니), ㅓ로 변환됨)
     words, phones, phones_kr = [], [], []
 
     for tier in tg.tiers:
@@ -242,14 +296,15 @@ def tg_to_alignment(tg: TextGrid, transcript: str) -> dict:
                              "end"  : iv.maxTime,
                              "text" : iv.mark}
                 phones.append(phon_dict)
-                phones_kr.append({"start": iv.minTime,
-                                  "end"  : iv.maxTime,
-                                  "text" : ipa2kr(iv.mark)})
 
-    # 형태소 분석된 raw timestamp에서 어절 복원된 것, 이것을 기존 words로 대체하고, raw words를 words_token으로 저장
+    # 형태소 분석된 raw timestamp에서 어절 복원
     words_restore = restore_eojeols(words, transcript)
-    
+
+    # 형태 정보(word text) 기반 IPA→한글 보정 + 음절 경계 산출
+    phones_kr, syllables = build_kr_and_syllables(phones, words_restore)
+
     return {"words": words_restore,
             "phonemes": phones,
             "phonemes_kr": phones_kr,
+            "syllables": syllables,
             "words_token": words}

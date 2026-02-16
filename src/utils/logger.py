@@ -35,8 +35,8 @@ def setup_logger(level=logging.INFO):
 
     logger_path = os.path.join(log_dir, 'main.log')
     rotating_handler = RotatingFileHandler(
-        logger_path, maxBytes=500 * 1024 * 1024, backupCount=5, encoding='utf-8'
-    )
+        logger_path, maxBytes=100 * 1024 * 1024, backupCount=5, encoding='utf-8'
+    )  # 100MB 최대, 백업 파일 5개 유지 (main.log.1 ~ main.log.5)
     rotating_handler.setFormatter(formatter)
 
     logger.addHandler(stream_handler)

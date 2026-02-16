@@ -8,7 +8,7 @@ from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
 # JSON 및 TextGrid 파일의 루트 경로 설정
-json_root = "/home/yugwon/nas/audio/ASR/free2022/NIKL_DIALOGUE_2022"
+json_root = os.environ.get("ASR_JSON_ROOT", "data/ASR/free2022/NIKL_DIALOGUE_2022")
 textgrid_root = "out/outputs2"
 
 # 허용 오차 (tolerance) 설정 (ms 단위)

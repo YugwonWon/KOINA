@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 
 # CSV 파일 경로
-csv_path = "/data3/yugwon/auto-trans-k-intonation/out/aligner_time_difference_ms.csv"
+csv_path = "out/aligner_time_difference_ms.csv"
 accuracy_csv_path = "aligner_accuracy_table_filtered.csv"
 
 # 허용 오차 범위 (50ms ~ 500ms까지 증가)

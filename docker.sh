@@ -50,6 +50,7 @@ _tag=$(get_tag "$1")
 echo "$_tag"
 
 docker buildx build \
+  --no-cache \
   --platform linux/amd64 \
   --build-arg MF_ARCH=x86_64 \
   -t linky1584/koina:$_tag \

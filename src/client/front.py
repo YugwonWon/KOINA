@@ -32,11 +32,18 @@ class TranscriptionRunner:
             return "이미 작업이 진행 중입니다. 잠시만 기다려주세요."
         
         self.stop_flag.clear()  # 작업 중단 플래그 초기화
+        
+        # config에서 n_jobs 읽기
+        config = load_config()
+        n_jobs = config.get("transcriber_n_jobs", 4)
+        wav_root_dir = config.get("wav_root_dir", "out")
+        save_dir = config.get("save_dir", "out/results")
 
         def run():
             try:
                 logger.info("[FRONT] 작업 시작!")
-                process_files(tsv_file, output_dir, self.stop_flag, runner=self)
+                process_files(tsv_file, output_dir, self.stop_flag, runner=self,
+                              n_jobs=n_jobs, wav_root_dir=wav_root_dir, save_dir=save_dir)
                 if self.stop_flag.is_set():
                     logger.info("[FRONT] 작업이 중단되었습니다.")
                 else:
@@ -175,10 +182,14 @@ def create_gradio_interface():
         "is_synthesis_save": False,
         "is_spline_syntheis_save": False,
         "is_only_alignment": False,
+        "is_percentage_save": True,
         "fixed_y_min": 0,
         "fixed_y_max": 600,
         "alignment_njobs": 4,
         "alignment_single_spk": False,
+        "transcriber_n_jobs": 4,
+        "wav_root_dir": "out",
+        "save_dir": "out/results",
     }
 
     with gr.Blocks(css=".custom-box {margin-top: 20px;}") as main:
@@ -261,7 +272,10 @@ def create_gradio_interface():
                 label = "연결 곡선(spline) 윤곽 합성 음성 저장",
                 value = default_config["is_spline_syntheis_save"],
                 interactive = True)
-        
+            is_percentage_save = gr.Checkbox(
+                label = "백분율 정규화 TextGrid 별도 저장",
+                value = default_config["is_percentage_save"],
+                interactive = True)
         # Align Options
         gr.Markdown("### 📏 Alignment Options")
         # 음성-텍스트 정렬 옵션
@@ -272,7 +286,9 @@ def create_gradio_interface():
                 interactive=True
             )
             single_spk = gr.Checkbox(label="단일 화자 모드(전체 오디오를 녹음한 화자 수가 한 명인 경우)", value=default_config["alignment_single_spk"], interactive=True)
-            njobs = gr.Textbox(label="병렬 처리 작업 수(동시에 사용할 CPU 코어/프로세스 개수)", placeholder="기본값: 4", interactive=True)
+            njobs = gr.Textbox(label="MFA 정렬 병렬 작업 수", placeholder="기본값: 4", interactive=True)
+        with gr.Row():
+            transcriber_n_jobs = gr.Textbox(label="억양 주석 병렬 프로세스 수(Momel 등 후처리)", placeholder="기본값: 4", interactive=True)
         
         # 버튼 및 상태 출력
         start_button = gr.Button("작업 시작")
@@ -294,9 +310,9 @@ def create_gradio_interface():
                         fixed_y_min, fixed_y_max,
                         use_gender_range_val,
                         M_min_val, M_max_val, F_min_val, F_max_val,
-                        is_synthesis_save, is_spline_syntheis_save,
+                        is_synthesis_save, is_spline_syntheis_save, is_percentage_save_val,
                         is_only_alignment,
-                        njobs, single_spk):
+                        njobs, single_spk, transcriber_n_jobs_val):
             try:
                 if not tsv_file:
                     return gr.update(), gr.update(), "", "❌ 오류: TSV/CSV 파일이 선택되지 않았습니다."
@@ -320,9 +336,13 @@ def create_gradio_interface():
                     "fixed_y_max": validate_and_convert(fixed_y_max, default_config.get("fixed_y_max", 600), float, "Y axis maximum"),
                     "is_synthesis_save": is_synthesis_save,
                     "is_spline_syntheis_save": is_spline_syntheis_save,
+                    "is_percentage_save": is_percentage_save_val,
                     "is_only_alignment": is_only_alignment,  # 기본값은 False로 설정
-                    "alignment_njobs": validate_and_convert(njobs, default_config["alignment_njobs"], int, "병렬 처리 작업 수"),
+                    "alignment_njobs": validate_and_convert(njobs, default_config["alignment_njobs"], int, "MFA 정렬 병렬 작업 수"),
                     "alignment_single_spk": validate_and_convert(single_spk, default_config["alignment_single_spk"], bool, "단일 화자 모드"),
+                    "transcriber_n_jobs": validate_and_convert(transcriber_n_jobs_val, default_config["transcriber_n_jobs"], int, "억양 주석 병렬 프로세스 수"),
+                    "wav_root_dir": default_config["wav_root_dir"],
+                    "save_dir": default_config["save_dir"],
                 }
                 if use_gender_range_val:
                     config["min_pitch_male"] = float(M_min_val) if M_min_val else 75.0
@@ -384,8 +404,9 @@ def create_gradio_interface():
                 use_gender_range,
                 M_min, M_max, F_min, F_max,
                 is_synthesis_save, is_spline_syntheis_save,
+                is_percentage_save,
                 is_only_alignment,
-                njobs, single_spk
+                njobs, single_spk, transcriber_n_jobs
             ],
             outputs=[start_button, stop_button, log_output, status_output]
         )

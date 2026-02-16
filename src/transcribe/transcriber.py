@@ -1,464 +1,245 @@
+"""
+억양 자동 전사 메인 모듈
+
+IntonationTranscriber 클래스와 process_files 오케스트레이션 함수를 제공합니다.
+실제 연산 로직은 하위 모듈에 위임합니다:
+
+- transcribe.pitch    : 피치 추출 · 신호 처리
+- transcribe.momel    : Momel 실행 · Points 티어 생성
+- transcribe.plotting : 시각화 · 그래프 저장
+"""
 
 import os
+import re
 import json
 import csv
-import math
-import subprocess
 import traceback
-import numpy as np
+import multiprocessing as mp
+from pathlib import Path
 
-from tqdm import tqdm
-from tqdm.contrib.logging import tqdm_logging_redirect
-
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
-
-from scipy.interpolate import CubicSpline
+# TextGrid 출력 시 제거할 구두점 패턴
+_PUNCT_RE = re.compile(r'[^\w\s]', re.UNICODE)
 
 import parselmouth
-from parselmouth.praat import call
-
+from tqdm import tqdm
+from tqdm.contrib.logging import tqdm_logging_redirect
 from textgrid import TextGrid, IntervalTier, PointTier
 
-from utils.file_ops import collect_wav_files, detect_delimiter
+from utils.file_ops import (
+    collect_wav_files, detect_delimiter, ensure_wav, SUPPORTED_AUDIO_EXTENSIONS,
+)
 from transcribe.aligner import MFAAligner, tg_to_alignment
-from pathlib import Path
-# 자식 로거 설정
+from transcribe.plotting import (
+    get_fontprop,
+    plot_pitch_contour,
+    plot_momel_points,
+    plot_simplified_contour,
+    plot_corrected_contour,
+    plot_spline_contour,
+    plot_percentage_contour,
+)
+from transcribe.pitch import (
+    extract_pitch,
+    extract_pitch_data,
+    simplify_by_slope,
+    apply_cubic_spline,
+    calculate_tcog,
+    synthesize_modified_wav,
+)
+from transcribe.momel import generate_momel_labels, get_pitch_points
+
 from utils.logger import main_logger
+
 logger = main_logger.getChild('transcriber')
 
 CONFIG_PATH = "out/config.json"
 MOMEL_PATH = "src/lib/momel/momel_linux"
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 설정 로드
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_config(config_path=CONFIG_PATH, momel_path=MOMEL_PATH):
+    """Config 파일을 로드합니다. 파일이 없으면 기본값을 반환합니다."""
+    defaults = {
+        "min_pitch": 75,
+        "min_pitch_male": 75,
+        "min_pitch_female": 100,
+        "max_pitch": 600,
+        "max_pitch_male": 500,
+        "max_pitch_female": 600,
+        "time_step": 0.01,
+        "sil_thresh": -25.0,
+        "sil_label": "#",
+        "snd_label": "sound",
+        "number_of_candidates": 15,
+        "very_accurate": 1,
+        "silence_threshold": 0.03,
+        "voicing_threshold": 0.5,
+        "octave_cost": 0.05,
+        "octave_jump_cost": 0.5,
+        "voice_unvoiced_cost": 0.2,
+        "show_spline": False,
+        "is_synthesis_save": False,
+        "is_spline_syntheis_save": False,
+        "is_only_alignment": False,
+        "alignment_njobs": 4,
+        "alignment_single_spk": False,
+        "fixed_y_min": 0,
+        "fixed_y_max": 600,
+        "momel_parameters": "30 60 750 1.04 20 5 0.05",
+        "momel_path": momel_path,
+    }
+
+    if os.path.exists(config_path):
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+
+        # 런타임 고정 값 덮어쓰기
+        config["sil_label"] = "#"
+        config["snd_label"] = "sound"
+        config["sil_thresh"] = -25.0
+        config["momel_parameters"] = "30 60 750 1.01 20 5 0.05"
+        config["momel_path"] = momel_path
+
+        # 누락된 기본값 보장
+        for key, val in defaults.items():
+            config.setdefault(key, val)
+
+        return config
+
+    logger.warning("Config 파일이 없습니다. 기본값을 사용합니다.")
+    return defaults
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IntonationTranscriber
+# ─────────────────────────────────────────────────────────────────────────────
+
 class IntonationTranscriber:
-    """
-    억양 자동 전사 클래스
-    """
-    _fontprop = None
+    """억양 자동 전사 클래스"""
 
-    @classmethod
-    def get_fontprop(cls):
-        if cls._fontprop is None:
-            cls._fontprop = cls.set_korean_font()
-        return cls._fontprop
-
-    @classmethod
-    def set_korean_font(cls):
-        """
-        한글 + IPA 가 모두 표시되도록 다중-폰트(fallback) 설정
-        """
-        candidates = [
-            # 한글·라틴
-            "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            # IPA
-            "/usr/local/share/fonts/NotoSansPhonetic-Regular.ttf",   # 수동 설치 시
-            "/usr/share/fonts/truetype/noto/NotoSansPhonetic-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/charis/CharisSIL-Regular.ttf",
-        ]
-
-        fams = []
-        for fp in candidates:
-            if os.path.exists(fp):
-                fm.fontManager.addfont(fp)
-                fams.append(fm.FontProperties(fname=fp).get_name())
-
-        if not fams:                       # 아무 글꼴도 없으면 경고만
-            logger.warning("⚠️  한글·IPA 글리프를 가진 폰트를 찾지 못했습니다.")
-            return None
-
-        mpl.rcParams["font.family"] = fams        # ['Noto Sans CJK KR', …]
-        mpl.rcParams["axes.unicode_minus"] = False
-        return fm.FontProperties(family=fams)  # 첫 번째를 기본 반환
-
-    @classmethod
-    def load_config(cls, config_path=CONFIG_PATH, momel_path=MOMEL_PATH):
-        """
-        Config 파일 로드
-        """
-        if os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = json.load(f)
-                config["sil_label"] = "#"
-                config["snd_label"] = "sound"
-                config["sil_thresh"] = -25.0
-                config["momel_parameters"] = "30 60 750 1.01 20 5 0.05"
-                config["momel_path"] = momel_path
-                return config
-        logger.warning(f"Config 파일이 없습니다. 기본값을 사용합니다.")
-        return {
-            "min_pitch": 75,
-            "min_pitch_male": 75,
-            "min_pitch_female": 100,
-            "max_pitch": 600,
-            "max_pitch_male": 500,
-            "max_pitch_female": 600,
-            "time_step": 0.01,
-            "sil_thresh": -25.0,
-            "sil_label": "#",
-            "snd_label": "sound",
-            "number_of_candidates": 15,
-            "very_accurate": 1,
-            "silence_threshold": 0.03,
-            "voicing_threshold": 0.5,
-            "octave_cost": 0.05,
-            "octave_jump_cost": 0.5,
-            "voice_unvoiced_cost": 0.2,
-            "show_spline": False,
-            "is_synthesis_save": False,
-            "is_spline_syntheis_save": False,
-            "is_only_alignment": False,
-            "alignment_njobs": 4,
-            "alignment_single_spk": False,
-            "fixed_y_min": 0,
-            "fixed_y_max": 600,
-            "momel_parameters": "30 60 750 1.04 20 5 0.05",
-            "momel_path": momel_path
-        }
-
-    def __init__(self, wav_file: str, transcript: str, sex: str, output_textgrid: str,
-                 settings = None,
-                 momel_path: str = MOMEL_PATH):
-        # 초기화 변수
+    def __init__(
+        self,
+        wav_file: str,
+        transcript: str,
+        sex: str,
+        output_textgrid: str,
+        settings=None,
+        momel_path: str = MOMEL_PATH,
+    ):
         self.wav_file = wav_file
-        self.transcript = transcript
+        # 구두점 제거: TextGrid에는 한글과 공백만 포함
+        self.transcript = re.sub(r'\s+', ' ', _PUNCT_RE.sub('', transcript)).strip()
         self.output_textgrid = output_textgrid
         self.momel_path = momel_path
         self.textgrid = TextGrid()
         self.sound = parselmouth.Sound(self.wav_file)
         self.duration = self.sound.get_total_duration()
         self.sex = sex
-        if settings is None:
-            self.settings = self.get_settings(config_path=CONFIG_PATH,
-                                              momel_path=momel_path)
-        else:
-            self.settings = settings
-        self.fontprop = self.get_fontprop()
+        self.settings = settings or load_config(momel_path=momel_path)
+        self.fontprop = get_fontprop()
         self.alignment = None
 
-    # def perform_alignment(self):
-    #     """
-    #     강제 정렬 수행
-    #     """
-    #     logger.info(f"[aligner] 강제 정렬을 시작합니다... (파일: {self.wav_file})")
-    #     self.alignment = self.aligner.align(self.wav_file, self.transcript)
-    #     if not self.alignment:
-    #         raise ValueError(f"[aligner] 강제 정렬에 실패했습니다. (파일: {self.wav_file})")
-    #     logger.info(f"[aligner] 강제 정렬이 완료되었습니다. (파일: {self.wav_file})")
-    #     # alignment 내용 출력 (디버깅 용도)
-    #     logger.debug(f"Alignment 결과: {json.dumps(self.alignment, indent=4, ensure_ascii=False)}")
+    # ── 경로 헬퍼 ──
 
-    def extract_pitch(self, sex):
-        """
-        파생된 pitch 추출 (gender별로 min_pitch와 max_pitch를 다르게 적용)
-        :param sex: 해당 음성 파일의 성별 정보
-        """
-        # 우선 기본값(또는 config.json의 값)을 사용
-        local_min_pitch = self.settings["min_pitch"]
-        local_max_pitch = self.settings["max_pitch"]
+    def _output_path(self, suffix):
+        """출력 파일 경로를 생성합니다. (확장자 앞에 suffix 추가)"""
+        return os.path.splitext(self.output_textgrid)[0] + suffix
 
-        # 성별 정보가 있다면, 해당 정보를 우선 적용
-        if sex in {"M", "m", "male", "man", "boy", "남성", "남", "남자"}:
-            local_min_pitch = self.settings["min_pitch_male"]
-            local_max_pitch = self.settings["max_pitch_male"]
-        elif sex in {"F", "f", "female", "woman", "girl", "여성", "여", "여자"}:
-            local_min_pitch = self.settings["min_pitch_female"]
-            local_max_pitch = self.settings["max_pitch_female"]
-
-        # logger.info(
-        #     f"[extract_pitch] sex={sex}, "
-        #     f"min_pitch={local_min_pitch}, max_pitch={local_max_pitch}, file={self.wav_file}"
-        # )
-
-        pitch = call(
-            self.sound, "To Pitch (ac)",
-            self.settings["time_step"],
-            local_min_pitch,
-            self.settings["number_of_candidates"],
-            self.settings["very_accurate"],
-            self.settings["silence_threshold"],
-            self.settings["voicing_threshold"],
-            self.settings["octave_cost"],
-            self.settings["octave_jump_cost"],
-            self.settings["voice_unvoiced_cost"],
-            local_max_pitch
-        )
-        return pitch
-
-    def run_momel_based_labels(self):
-        """
-        Momel을 이용하여 Points 티어를 생성 (time_step 고정 유지)
-        """
-        points_tier = PointTier(name="Points", minTime=0, maxTime=self.duration)
-        self.textgrid.append(points_tier)
-
-        duration = call(self.sound, "Get total duration")
-        pitch = self.extract_pitch(sex=self.sex)
-
-        # 1) Pitch 객체에서 (프레임별) 시간·f0 추출
-        #    - 모든 프레임은 등간격 (self.settings["time_step"])이라고 가정
-        num_frames = call(pitch, "Get number of frames")
-
-        # Praat에서 "Get time from frame number"로 각 프레임의 중앙 시간, "Get value in frame"으로 f0(Hz)
-        frame_times = []
-        frame_f0_values = []
-        for i in range(1, num_frames + 1):
-            t_i = call(pitch, "Get time from frame number", i)
-            f0_i = call(pitch, "Get value in frame", i, "Hertz")
-            if f0_i is None or f0_i <= 0 or math.isnan(f0_i):
-                f0_i = 0.0  # 무음 프레임을 0Hz로 처리
-            frame_times.append(t_i)
-            frame_f0_values.append(f0_i)
-
-        # 2) Doubling/Halving 현상 제거
-        #    - 이미 구현한 remove_doubling_halving()이 '정상' 프레임만 (time, f0)로 반환한다고 가정
-        corrected_times, corrected_f0_values = self.remove_doubling_halving(frame_times, frame_f0_values)
-        corrected_image_path = os.path.splitext(self.output_textgrid)[0] + "_corrected_doubling_halving_contour.jpg"
-        self.plot_doubling_halving_corrected_pitch_contour(corrected_times, corrected_f0_values, corrected_image_path)
-        
-        #    - '정상 프레임'인지 아닌지 구분하기 위해 set() 구성
-        #      (부동소수점 문제 예방 위해 round(t, 6) 등 사용 권장)
-        corrected_set = set()
-        for t_val, f0_val in zip(corrected_times, corrected_f0_values):
-            corrected_set.add(round(t_val, 6))
-
-        # 3) 침묵 구간(음성 구간) 계산
-        sil_tg = call(
-            self.sound, "To TextGrid (silences)",
-            70,  # silence threshold
-            self.settings["time_step"],
-            self.settings["sil_thresh"],
-            0.25, 0.05,
-            self.settings["sil_label"],
-            self.settings["snd_label"]
-        )
-        n_intervals = call(sil_tg, "Get number of intervals", 1)
-        snd_intervals = []
-        for i in range(1, n_intervals + 1):
-            label = call(sil_tg, "Get label of interval", 1, i)
-            if label == self.settings["snd_label"]:
-                start_t = call(sil_tg, "Get start time of interval", 1, i)
-                end_t = call(sil_tg, "Get end time of interval", 1, i)
-                snd_intervals.append((start_t, end_t))
-
-        # Doubling/Halving으로 살아남은 f0 값 중 최소/최대
-        valid_f0_vals = [fv for fv in corrected_f0_values if fv > 0]
-        if len(valid_f0_vals) == 0:
-            min_f0, max_f0 = 0.0, 0.0
-        else:
-            min_f0 = min(valid_f0_vals)
-            max_f0 = max(valid_f0_vals)
-
-        momel_cmd = self.settings["momel_path"]
-        temp_f0_min = float('inf')
-        temp_f0_max = float('-inf')
-
-        # 4) 구간별로 Momel 실행
-        for (start_time, end_time) in snd_intervals:
-            snd_interval_name = f"part_{start_time:.3f}_{end_time:.3f}"
-            f0_file = f"{snd_interval_name}.f0"
-            momel_file = f"{snd_interval_name}.model"
-
-            os.makedirs('out/models', exist_ok=True)
-            f0_path = os.path.join('out/models', f0_file)
-            momel_path = os.path.join('out/models', momel_file)
-            if os.path.exists(f0_path):
-                os.remove(f0_path)
-            if os.path.exists(momel_path):
-                os.remove(momel_path)
-
-            # (a) "구간에 해당하는 프레임 범위" 계산
-            #     보통 frame_idx = int( (time - first_frame_time) / time_step + 0.5 ) 형태가 일반적이나
-            #     여기선 간단히 time / time_step 로 사용
-            start_frame_idx = int(start_time / self.settings["time_step"])
-            end_frame_idx = int(end_time / self.settings["time_step"])
-            # 경계 보정
-            if start_frame_idx < 0:
-                start_frame_idx = 0
-            if end_frame_idx >= num_frames:
-                end_frame_idx = num_frames - 1
-
-            # (b) .f0 파일 생성:
-            #     Momel은 "등간격 샘플"로 한 줄씩 처리하므로,
-            #     [start_frame_idx .. end_frame_idx] 모든 프레임에 대해, Doubling/Halving 아닌 프레임이면 원본 f0,
-            #     제거 프레임이면 0.0을 기록한다
-            with open(f0_path, 'w') as f:
-                for frame_i in range(start_frame_idx, end_frame_idx + 1):
-                    # frame_times[frame_i]가 '살아남은' 프레임인가?
-                    t_rounded = round(frame_times[frame_i], 6)
-                    if t_rounded in corrected_set:
-                        f0_val = frame_f0_values[frame_i]  # 제거되지 않은 프레임
-                    else:
-                        f0_val = 0.0  # Doubling/Halving 제거 or 무음 프레임
-                    f.write(f"{f0_val}\n")
-                    
-            # (c) Momel 실행
-            self.run_momel(momel_cmd, momel_file, f0_file)
-
-            # (d) Momel 결과 파싱하여 Points 티어에 반영
-            with open(momel_path, 'r') as file:
-                lines = file.readlines()
-
-            for line in lines:
-                ms_str, f0_str = line.strip().split()
-                ms_val = float(ms_str)    # Momel은 ms 단위
-                f0_val = float(f0_str)
-
-                # Momel은 0번째 줄 ~ N번째 줄을 등간격(time_step)으로 여기며,
-                # ms_val은 Momel 내부 계산으로 인한 상대 위치
-                # 실제 시간 = start_time + (ms_val / 1000.0)
-                time_val = start_time + (ms_val / 1000.0)
-
-                # f0값 범위 클리핑
-                f0_val = max(min(f0_val, max_f0), min_f0)
-
-                # 시간 범위도 [0, duration]으로 보정
-                if time_val < 0:
-                    time_val = 0
-                if time_val > duration:
-                    time_val = duration
-
-                if f0_val > temp_f0_max:
-                    temp_f0_max = f0_val
-                if f0_val < temp_f0_min:
-                    temp_f0_min = f0_val
-
-                # 중복 포인트 방지
-                existing_pts = [pt for pt in points_tier.points if pt.time == time_val]
-                if not existing_pts:
-                    points_tier.add(time_val, f"{f0_val:.2f}")
-
-            # (e) 임시 파일 정리
-            os.remove(f0_path)
-            os.remove(momel_path)
-
-        logger.info(
-            f"[RUN] Momel 음높이 포인트 생성 완료: F0 범위: {temp_f0_min:.2f} ~ {temp_f0_max:.2f}, {self.wav_file}"
-        )
-
-    def run_momel(self, momel_cmd: str, momel_file: str, f0_file: str):
-        try:
-            momel_cmd = os.path.abspath(momel_cmd)  # 절대 경로 변환
-            f0_path = os.path.abspath(f'out/models/{f0_file}')
-            momel_out = os.path.abspath(f'out/models/{momel_file}')
-
-            # 경로가 포함된 환경 변수 설정
-            env = os.environ.copy()
-            env['PATH'] = f'{os.path.dirname(momel_cmd)}:{env["PATH"]}'
-
-            command = f'{momel_cmd} {self.settings["momel_parameters"]} <"{f0_path}" >"{momel_out}"'
-            subprocess.run(command, shell=True, check=True, env=env)
-            logger.info(f'[RUN] Momel 실행 완료: {momel_file}')
-        except subprocess.CalledProcessError as e:
-            logger.error(f'[RUN] Momel 실행 중 오류 발생: {e}')
+    # ── TextGrid 생성 ──
 
     def create_textgrid(self):
-        """
-        TextGrid 생성 및 티어 추가
-        """
+        """TextGrid 생성 및 정렬 데이터 기반 티어 추가."""
         logger.info(f"[RUN] TextGrid를 생성합니다...: {self.wav_file}")
 
-        # utterance 티어 생성
+        # 기본 티어 생성
         utterance_tier = IntervalTier(name="utterance", minTime=0, maxTime=self.duration)
         utterance_tier.add(0, self.duration, self.transcript)
         self.textgrid.append(utterance_tier)
 
-        # word 티어 생성
         word_tier = IntervalTier(name="word", minTime=0, maxTime=self.duration)
         self.textgrid.append(word_tier)
-        
-        # word_token 티어 생성
-        word_token_tier = IntervalTier(name="word_token", minTime=0, maxTime=self.duration)
-        self.textgrid.append(word_token_tier)
 
-        # phoneme 티어 생성
+        syllable_tier = IntervalTier(name="syllable", minTime=0, maxTime=self.duration)
+        self.textgrid.append(syllable_tier)
+
         phoneme_tier = IntervalTier(name="phoneme", minTime=0, maxTime=self.duration)
         self.textgrid.append(phoneme_tier)
-        
-        # Ipa2kr 변환
-        phonkr_tier  = IntervalTier("phoneme_kr", 0, self.duration)
-        self.textgrid.append(phonkr_tier)
-        
-        # alignment 데이터가 존재할 경우, word 및 phoneme 티어 채우기
-        if self.alignment:
-            # word 티어 채우기
-            words = self.alignment.get('words', [])
-            for word in words:
-                start = word.get('start', 0)
-                end = word.get('end', 0)
-                text = word.get('text', '')
-                if end > word_tier.maxTime:
-                    end = word_tier.maxTime
-                word_tier.add(start, end, text)
 
-            # phoneme 티어 채우기
-            phonemes = self.alignment.get('phonemes', [])
-            for phoneme in phonemes:
-                start = phoneme.get('start', 0)
-                end = phoneme.get('end', 0)
-                text = phoneme.get('text', '')
-                if end > phoneme_tier.maxTime:
-                    end = phoneme_tier.maxTime
-                phoneme_tier.add(start, end, text)
-            
-            # phoneme_kr 티어 채우기
-            phonemes_kr = self.alignment.get('phonemes_kr', [])
-            for phoneme in phonemes_kr:
-                start = phoneme.get('start', 0)
-                end = phoneme.get('end', 0)
-                text = phoneme.get('text', '')
-                if end > phonkr_tier.maxTime:
-                    end = phonkr_tier.maxTime
-                phonkr_tier.add(start, end, text)
-                
+        phonkr_tier = IntervalTier("phoneme_kr", 0, self.duration)
+        self.textgrid.append(phonkr_tier)
+
+        if not self.alignment:
+            return
+
+        # word 티어 채우기
+        words = self.alignment.get('words', [])
+        prev_end = 0.0
+        for word in words:
+            start, end = word.get('start', 0), word.get('end', 0)
+            text = word.get('text', '') or 'SP'
+            if start > prev_end + 0.001:
+                word_tier.add(prev_end, min(start, word_tier.maxTime), 'SP')
+            if end > word_tier.maxTime:
+                end = word_tier.maxTime
+            word_tier.add(start, end, text)
+            prev_end = end
+        if prev_end < word_tier.maxTime - 0.001:
+            word_tier.add(prev_end, word_tier.maxTime, 'SP')
+
+        # phoneme 티어 채우기
+        for phoneme in self.alignment.get('phonemes', []):
+            start, end = phoneme.get('start', 0), phoneme.get('end', 0)
+            text = phoneme.get('text', '') or 'SP'
+            if end > phoneme_tier.maxTime:
+                end = phoneme_tier.maxTime
+            phoneme_tier.add(start, end, text)
+
+        # phoneme_kr 티어 채우기
+        for phoneme in self.alignment.get('phonemes_kr', []):
+            start, end = phoneme.get('start', 0), phoneme.get('end', 0)
+            text = phoneme.get('text', '') or 'SP'
+            if end > phonkr_tier.maxTime:
+                end = phonkr_tier.maxTime
+            phonkr_tier.add(start, end, text)
+
+        # syllable 티어 채우기
+        self._fill_syllable_tier(syllable_tier)
+
+    def _fill_syllable_tier(self, syllable_tier):
+        """alignment 의 음절 구간 정보로 syllable 티어를 채웁니다."""
+        syllables = self.alignment.get('syllables', [])
+        if not syllables:
+            return
+
+        prev_end = 0.0
+        for syl in syllables:
+            start, end = syl.get('start', 0), syl.get('end', 0)
+            text = syl.get('text', '')
+            if start > prev_end + 0.001:
+                syllable_tier.add(prev_end, min(start, syllable_tier.maxTime), 'SP')
+            if end > syllable_tier.maxTime:
+                end = syllable_tier.maxTime
+            syllable_tier.add(start, end, text)
+            prev_end = end
+        if prev_end < syllable_tier.maxTime - 0.001:
+            syllable_tier.add(prev_end, syllable_tier.maxTime, 'SP')
+
+    # ── 저장 ──
 
     def save_textgrid(self):
-        """
-        TextGrid 저장
-        """
+        """TextGrid 를 파일로 저장합니다."""
         self.textgrid.write(self.output_textgrid)
         logger.info(f"[RUN] TextGrid가 성공적으로 저장되었습니다: {self.output_textgrid}")
-        # # WAV 파일을 TextGrid 위치로 복사
-        # wav_output_path = self.output_textgrid.replace('.TextGrid', '.wav')
-        # try:
-        #     shutil.copy(self.wav_file, wav_output_path)
-        #     logger.info(f"WAV 파일을 {wav_output_path}에 복사했습니다.")
-        # except Exception as e:
-        #     logger.error(f"WAV 파일을 복사하는 중 오류가 발생했습니다: {e}")
 
-    def calculate_tcog(self, pitch):
-        """
-        TCoG(Tonal Center of Gravity) 계산
-        """
-        num_frames = call(pitch, "Get number of frames")
-        total_weighted_time = 0
-        total_f0 = 0
+    # ── TCoG ──
 
-        for i in range(1, num_frames + 1):
-            time = call(pitch, "Get time from frame number", i)
-            f0 = call(pitch, "Get value in frame", i, "Hertz")
-            if f0 > 0:  # 무음 구간은 제외
-                total_weighted_time += time * f0
-                total_f0 += f0
-
-        if total_f0 == 0:
-            return None
-
-        tcog = total_weighted_time / total_f0
-        return tcog
-
-    def add_tcog_tier(self):
-        """
-        TCoG 티어를 TextGrid에 추가
-        """
-        pitch = self.extract_pitch(sex=self.sex)
-        tcog = self.calculate_tcog(pitch)
-
+    def add_tcog_tier(self, pitch):
+        """TCoG 티어를 TextGrid 에 추가합니다."""
+        tcog = calculate_tcog(pitch)
         if tcog is not None:
-            # TCoG PointTier 생성 및 추가
             tcog_tier = PointTier(name="TCoG", minTime=0, maxTime=self.duration)
             tcog_tier.add(tcog, "TCoG")
             self.textgrid.append(tcog_tier)
@@ -466,634 +247,295 @@ class IntonationTranscriber:
         else:
             logger.warning("[RUN] TCoG 계산에 실패했습니다.")
 
-    def add_percentage_points_tier(self, corrected_times, corrected_f0_values):
+    # ── 백분율 정규화 ──
+
+    def add_percentage_points_tier(self, times, f0_values, pitch, output_path):
         """
-        최종 조정된 포인트를 기반으로 Points(pct) 티어를 추가합니다.
+        백분율 시간축(0~100)으로 정규화한 Points(pct) 티어를 별도 TextGrid 에 저장합니다.
         """
-        percentage_points_tier = PointTier(name="Points(pct)", minTime=0, maxTime=100)
+        pct_tg = TextGrid()
 
-        for time, f0 in zip(corrected_times, corrected_f0_values):
-            percentage_time = (time / self.duration) * 100
-            percentage_points_tier.add(percentage_time, f"{f0:.2f}")
-
-        self.textgrid.append(percentage_points_tier)
-        logger.info("[RUN] Points(pct) 티어가 추가되었습니다.")
-
-    def simplify_pitch_points_by_slope(self, times, f0_values, slope_threshold=27):
-        """
-        음높이 포인트를 기울기 기반으로 단순화하여 직선 상의 중간 포인트를 제거합니다.
-
-        Parameters:
-            times (list): 음높이 포인트의 시간 리스트.
-            f0_values (list): 음높이 포인트의 f0 값 리스트.
-            slope_threshold (float): 기울기 차이 임계값.
-
-        Returns:
-            list: F0 목표점 최소화 시간과 f0 값 리스트.
-        """
-        simplified_times = [times[0]]
-        simplified_f0_values = [f0_values[0]]
-
-        i = 1
-        while i < len(times) - 1:
-            # 첫 번째와 세 번째 포인트의 기울기 계산
-            main_slope = (f0_values[i + 1] - f0_values[i - 1]) / (times[i + 1] - times[i - 1])
-            # 두 번째 포인트에서의 기울기 계산
-            mid_slope = (f0_values[i] - f0_values[i - 1]) / (times[i] - times[i - 1])
-
-            # 기울기 차이가 임계값 이하이면 중간 포인트 제거
-            if abs(main_slope - mid_slope) <= slope_threshold:
-                i += 1  # 중간 포인트 건너뜀
-            else:
-                # 중요 변화가 있으므로 포인트 유지
-                simplified_times.append(times[i])
-                simplified_f0_values.append(f0_values[i])
-                i += 1
-
-        # 마지막 포인트를 추가
-        simplified_times.append(times[-1])
-        simplified_f0_values.append(f0_values[-1])
-
-        return simplified_times, simplified_f0_values
-
-
-    def synthesize_pitch_modified_wav(self, output_wav_path, times, f0_values):
-        """
-        Momel의 Points 티어 또는 F0 목표점 최소화를 기반으로 pitch를 변조하여 새로운 WAV 파일로 저장합니다.
-        """
-        manipulation = call(self.sound, "To Manipulation", 0.01, 75, 600)
-        pitch_tier = call(manipulation, "Extract pitch tier")
-        call(pitch_tier, "Remove points between", 0, self.duration)
-
-        for i, time in enumerate(times):
-            call(pitch_tier, "Add point", time, f0_values[i])
-
-        call([pitch_tier, manipulation], "Replace pitch tier")
-        manipulated_sound = call(manipulation, "Get resynthesis (overlap-add)")
-        manipulated_sound.save(output_wav_path, 'WAV')
-        logger.info(f"[RUN] F0 목표점 최소화를 적용한 음성을 저장했습니다: {output_wav_path}")
-
-    def get_momel_pitch_points(self, points_tier):
-        """
-        Momel Points 티어에서 시간과 음높이 값을 추출합니다.
-        """
-        times = [point.time for point in points_tier.points]
-        f0_values = [float(point.mark) for point in points_tier.points]
-        return times, f0_values
-
-    def plot_graph_with_annotations(
-        self, ax, times, f0_values, title, label,
-        show_textgrid=True, show_spline=False,
-        corrected_times=None, corrected_f0_values=None):
-        """
-        주어진 음높이 데이터를 사용하여 그래프를 그리고 TextGrid 주석을 추가합니다.
-
-        Parameters:
-            ax: matplotlib Axes 객체
-            times: 음높이 포인트 시간 리스트
-            f0_values: 음높이 포인트 f0 값 리스트
-            title: 그래프 제목
-            label: 범례에 사용할 레이블
-            show_textgrid: 텍스트 그리드를 표시할지 여부
-            show_spline: 스플라인(초록색 점선) 및 Doubling/Halving 제거된 지점 표시 여부
-            corrected_times: Doubling/Halving 제거 후 시간 리스트
-            corrected_f0_values: Doubling/Halving 제거 후 f0 리스트
-        """
-
-        # 1) f0=0인 구간 제거(필터링)
-        filtered_times = []
-        filtered_f0 = []
+        pct_points = PointTier(name="Points(pct)", minTime=0, maxTime=100)
         for t, f in zip(times, f0_values):
-            if f > 0:  # f0가 0보다 큰 값만 그래프에 표시
-                filtered_times.append(t)
-                filtered_f0.append(f)
+            pct_points.add((t / self.duration) * 100, f"{f:.2f}")
+        pct_tg.append(pct_points)
 
-        # 2) 기본 그래프(원본 f0)
-        if not show_spline:
-            # 파란 실선 + 동그라미 마커
-            ax.plot(filtered_times, filtered_f0,
-                    linestyle='-', marker='o', markersize=3,
-                    label=label)
+        tcog = calculate_tcog(pitch)
+        if tcog is not None:
+            tcog_pct = PointTier(name="TCoG(pct)", minTime=0, maxTime=100)
+            tcog_pct.add((tcog / self.duration) * 100, "TCoG")
+            pct_tg.append(tcog_pct)
 
-        # x축 레이블(오른쪽 정렬)
-        ax.set_xlabel("시간 (초)", labelpad=5, loc='right')
+        pct_tg.write(output_path)
+        logger.info(f"[RUN] 백분율 정규화 TextGrid가 저장되었습니다: {output_path}")
 
-        # 3) Doubling/Halving 제거된 포인트 표시 (스플라인 모드일 때만)
-        if show_spline and corrected_times is not None and corrected_f0_values is not None:
-            # corrected에서도 0Hz 제거
-            corrected_times_filtered = []
-            corrected_f0_filtered = []
-            for ct, cf in zip(corrected_times, corrected_f0_values):
-                if cf > 0:
-                    corrected_times_filtered.append(ct)
-                    corrected_f0_filtered.append(cf)
+    # ── Momel 후처리 (목표점 최소화 · 스플라인 · 합성) ──
 
-            # 빨간 점으로 표시
-            ax.scatter(corrected_times_filtered, corrected_f0_filtered,
-                    color='red', marker='o', s=30,
-                    label='Corrected Points')
-
-        # 4) 스플라인 윤곽(초록색 점선)
-        if show_spline:
-            # times/f0_values도 0Hz만 제거하여 그린다 (위에서 필터링한 filtered_times/filtered_f0 사용)
-            ax.plot(filtered_times, filtered_f0,
-                    color='green', linestyle='--', linewidth=2,
-                    label='Spline Contour')
-
-        # y축 범위 (예시: 0~600Hz)
-        # ax.set_ylim(0, 600)
-
-        ax.set_ylabel("Frequency (Hz)")
-        ax.set_title(title, fontproperties=self.fontprop)
-        ax.legend(loc="upper right")
-
-        # 5) TextGrid 주석 표시
-        if show_textgrid:
-            # word, phoneme 티어를 x축 아래에 표시
-            word_y_position = -0.20
-            phoneme_y_position = -0.35
-
-            for tier in self.textgrid.tiers:
-                if isinstance(tier, IntervalTier) and tier.name in ['word', 'phoneme']:
-                    y_position = word_y_position if tier.name == "word" else phoneme_y_position
-                    color = 'red' if tier.name == "word" else 'yellow'
-
-                    for interval in tier.intervals:
-                        start_time = interval.minTime
-                        end_time = interval.maxTime
-                        mid_time = (start_time + end_time) / 2
-
-                        # 텍스트(단어나 음소) 표시
-                        ax.text(mid_time, y_position, interval.mark,
-                                ha='center', va='top', color='black',
-                                fontproperties=self.fontprop,
-                                transform=ax.get_xaxis_transform())
-
-                        # 구간 시작 지점에 세로선 추가
-                        ax.axvline(x=start_time, color=color, linestyle='--', linewidth=0.5)
-
-        # 하단 여백 조정 (텍스트그리드 레이블이 겹치지 않도록)
-        plt.subplots_adjust(bottom=0.3)
-
-    def plot_pitch_and_textgrid(self, pitch):
-        """
-        음높이 윤곽과 TextGrid 주석을 시각화하여 이미지로 저장합니다.
-        """
-        times = []
-        f0_values = []
-
-        # 음높이 객체에서 음높이 포인트를 추출
-        num_frames = call(pitch, "Get number of frames")
-        for i in range(1, num_frames + 1):
-            time = call(pitch, "Get time from frame number", i)
-            f0 = call(pitch, "Get value in frame", i, "Hertz")
-            if f0 > 0:  # 무음 구간 제외
-                times.append(time)
-                f0_values.append(f0)
-
-        # 그래프 생성
-        fig, ax = plt.subplots(figsize=(15, 5))
-        self.plot_graph_with_annotations(ax, times, f0_values, "음높이 포인트 및 TextGrid 주석", "Pitch Point", show_textgrid=self.settings['show_spline'])
-
-        # JPG로 저장
-        output_image_path = os.path.splitext(self.output_textgrid)[0] + "_pitch_contour.jpg"
-
-        plt.savefig(output_image_path, format="jpg", pil_kwargs={"quality": 85})  # JPEG로 저장 시 품질 설정
-
-        plt.close()
-        logger.info(f"[RUN] 원시 음높이 그래프가 저장되었습니다: {output_image_path}")
-
-    def plot_momel_pitch_points(self):
-        """
-        Momel에서 생성된 Points 티어를 기반으로 음높이 포인트들을 시각화하여 이미지로 저장합니다.
-        """
-        # Points 티어 검색
-        points_tier = next((tier for tier in self.textgrid.tiers if tier.name == "Points"), None)
+    def _apply_momel_modulation(self, pitch):
+        """Momel Points 티어에서 목표점 최소화 · 스플라인 · 합성을 적용합니다."""
+        points_tier = next(
+            (t for t in self.textgrid.tiers if t.name == "Points"), None
+        )
         if not points_tier:
-            logger.warning("Points 티어를 찾을 수 없습니다.")
             return
 
-        # Points 티어에서 시간과 음높이 값을 추출
-        times = [point.time for point in points_tier.points]
-        f0_values = [float(point.mark) for point in points_tier.points]
+        times, f0_values = get_pitch_points(points_tier)
 
-        # 그래프 생성
-        fig, ax = plt.subplots(figsize=(15, 5))
-        self.plot_graph_with_annotations(ax, times, f0_values, "Momel 음높이 포인트와 TextGrid 주석", "Momel Pitch Point", show_textgrid=True)
+        # 기울기 기반 목표점 최소화
+        simplified_t, simplified_f = simplify_by_slope(times, f0_values)
 
-        # JPEG로 바로 저장
-        output_image_path = os.path.splitext(self.output_textgrid)[0] + "_momel_pitch_contour.jpg"
-        plt.savefig(output_image_path, format="jpg", pil_kwargs={"quality": 85})  # JPEG로 저장 시 품질 설정
-        plt.close()
+        # 그래프
+        plot_simplified_contour(
+            simplified_t, simplified_f,
+            self._output_path("_momel_pitch_contour_minimalized.jpg"),
+            self.textgrid, self.fontprop,
+        )
 
-    def plot_simplified_pitch_contour(self, times, f0_values, output_path):
-        """
-        F0 목표점 최소화 포인트를 사용하여 Momel Pitch contour를 그려서 저장합니다.
-        """
-        fig, ax = plt.subplots(figsize=(15, 5))
-        self.plot_graph_with_annotations(ax, times, f0_values, "Momel 음높이 포인트와 TextGrid 주석 (음높이 목표점 최소화)", "pitch target minimalized Momel Pitch Point")
-        plt.savefig(output_path, format="jpg", pil_kwargs={"quality": 85})  # JPEG로 저장 시 품질 설정
-        plt.close()
-        logger.info(f"[RUN] F0 목표점 최소화 포인트 그래프가 저장되었습니다: {output_path}")
+        # 합성 음성 (옵션)
+        if self.settings['is_synthesis_save']:
+            synthesize_modified_wav(
+                self.sound,
+                self._output_path("_modified_minimalization.wav"),
+                simplified_t, simplified_f, self.duration,
+            )
 
-    def plot_doubling_halving_corrected_pitch_contour(self, times, f0_values, output_path):
-        """
-        Doubling 및 Halving이 제거된 음높이 포인트를 사용하여 그래프를 그려서 저장합니다.
-        """
-        fig, ax = plt.subplots(figsize=(15, 5))
-        self.plot_graph_with_annotations(ax, times, f0_values, "배증/반감 제거된 음높이 포인트", "Corrected Pitch Points")
-        plt.savefig(output_path, format="jpg", pil_kwargs={"quality": 85})
-        plt.close()
-        logger.info(f"[RUN] Doubling/Halving 제거된 음높이 포인트 그래프가 저장되었습니다: {output_path}")
+        # 백분율 정규화 TextGrid (옵션)
+        if self.settings.get('is_percentage_save', True):
+            self.add_percentage_points_tier(
+                simplified_t, simplified_f, pitch,
+                self._output_path("_pct.TextGrid"),
+            )
 
-    def plot_spline_contour(self, times, f0_values, output_path, corrected_times, corrected_f0_values):
-        """
-        삼차 스플라인 음높이 포인트를 사용하여 그래프를 그려서 저장합니다.
-        """
-        fig, ax = plt.subplots(figsize=(15, 5))
-        # y축 고정 (사용자가 입력한 범위 적용)
-        ax.set_ylim((self.settings['fixed_y_min'], self.settings['fixed_y_max']))
-        self.plot_graph_with_annotations(ax, times, f0_values, "삼차 스플라인 음높이 윤곽", "Spline Pitch Contour", show_spline=self.settings['show_spline'], corrected_times=corrected_times, corrected_f0_values=corrected_f0_values)
-        plt.savefig(output_path, format="jpg", pil_kwargs={"quality": 85})
-        plt.close()
-        logger.info(f"[RUN] 삼차 스플라인 그래프가 저장되었습니다: {output_path}")
-        
-    def plot_percentage_pitch_contour(self, times, f0_values, output_image_path, y_fixed_range=600):
-        """
-        백분율 기반으로 정규화된 음높이 포인트를 그래프로 그립니다.
+        # 백분율 그래프
+        plot_percentage_contour(
+            simplified_t, simplified_f,
+            self._output_path("_momel_pitch_percentage.jpg"),
+            self.duration, self.fontprop, self.settings,
+        )
 
-        Parameters:
-            times (list): 시간 리스트.
-            f0_values (list): 음높이 값 리스트.
-            output_image_path (str): 출력 이미지 경로.
-            y_fixed_range (tuple, optional): y축의 최소값과 최대값. 예: (0, 600).
-        """
-        # 시간 값을 퍼센테이지로 변환
-        percentage_times = [(time / self.duration) * 100 for time in times]
+        # Points 티어를 최소화된 데이터로 업데이트
+        points_tier.points.clear()
+        for t, f in zip(simplified_t, simplified_f):
+            points_tier.add(t, f"{f:.2f}")
 
-        # 그래프 그리기
-        fig, ax = plt.subplots(figsize=(15, 5))
-        ax.plot(percentage_times, f0_values, color='blue', linestyle='-', marker='o', markersize=3, label="Percentage Pitch Contour")
+        # 3차 스플라인
+        spline_t, spline_f = apply_cubic_spline(simplified_t, simplified_f)
 
-        # y축 고정 (사용자가 입력한 범위 적용)
-        if y_fixed_range:
-            ax.set_ylim((self.settings['fixed_y_min'], self.settings['fixed_y_max']))
-            
-        # x축과 y축 레이블 설정
-        ax.set_xlabel("Time (%)", labelpad=5, loc='right')
-        ax.set_ylabel("Frequency (Hz)")
-        ax.set_title("Percentage Normalized Pitch Contour", fontproperties=self.fontprop)
+        if self.settings['show_spline']:
+            plot_spline_contour(
+                spline_t, spline_f,
+                self._output_path("_spline_contour.jpg"),
+                simplified_t, simplified_f,
+                self.textgrid, self.fontprop, self.settings,
+            )
 
-        # 범례 추가 및 그래프 저장
-        ax.legend(loc="upper right")
-        plt.savefig(output_image_path, format="jpg", pil_kwargs={"quality": 85})
-        plt.close()
-        logger.info(f"[RUN] 백분율 기반 음높이 그래프가 저장되었습니다: {output_image_path}")
+        if self.settings['is_spline_syntheis_save']:
+            synthesize_modified_wav(
+                self.sound,
+                self._output_path("_spline_contour.wav"),
+                spline_t, spline_f, self.duration,
+            )
 
-    def adjust_bottom_margin(self, fig, ax, times, f0_values):
-        """
-        TextGrid 주석을 위한 하단 여백을 자동으로 조정합니다.
-
-        Parameters:
-            fig: matplotlib Figure 객체
-            ax: matplotlib Axes 객체
-            times: 음높이 포인트 시간 리스트
-            f0_values: 음높이 포인트 f0 값 리스트
-        """
-        # 텍스트 그리드가 있는 경우 텍스트를 추가하고 여백 측정
-        if any(tier.name in ["word", "phoneme"] for tier in self.textgrid.tiers):
-            sample_text = ax.text(0, 0, "샘플 텍스트", fontproperties=self.fontprop)
-            renderer = fig.canvas.get_renderer()
-            text_height = sample_text.get_window_extent(renderer=renderer).height / fig.dpi
-            sample_text.remove()
-
-            # 텍스트 높이를 기준으로 하단 여백을 동적으로 조정
-            plt.subplots_adjust(bottom=text_height * 2.5)
-        else:
-            plt.subplots_adjust(bottom=0.1)  # 텍스트 그리드가 없는 경우 기본값으로 설정
-
-    def get_text_height_adjustment(self, ax, scale=2.5):
-        """
-        그래프의 하단 여백을 텍스트 높이를 기준으로 조정할 때 사용할 값을 계산합니다.
-
-        Parameters:
-            ax: matplotlib Axes 객체
-            scale: 텍스트 높이에 곱할 스케일 값 (기본값: 2.5)
-
-        Returns:
-            float: 텍스트 높이를 기반으로 한 여백 조정 값
-        """
-        sample_text = ax.text(0, 0, "샘플 텍스트", fontproperties=self.fontprop)
-        renderer = ax.figure.canvas.get_renderer()
-        text_height = sample_text.get_window_extent(renderer=renderer).height / ax.figure.dpi
-        sample_text.remove()
-        return text_height * scale
-
-    def synthesize_spline_modified_wav(self, output_wav_path, spline_times, spline_f0_values):
-        """
-        삼차 스플라인으로 수정된 음높이를 기반으로 새로운 WAV 파일로 저장합니다.
-
-        Parameters:
-            output_wav_path (str): 저장할 WAV 파일 경로.
-            spline_times (list): 스플라인 기반 시간 리스트.
-            spline_f0_values (list): 스플라인 기반 F0 값 리스트.
-        """
-        manipulation = call(self.sound, "To Manipulation", 0.01, 75, 600)
-        pitch_tier = call(manipulation, "Extract pitch tier")
-        call(pitch_tier, "Remove points between", 0, self.duration)
-
-        # 스플라인 데이터를 Pitch Tier에 추가
-        for time, f0 in zip(spline_times, spline_f0_values):
-            call(pitch_tier, "Add point", time, f0)
-
-        # 수정된 Pitch Tier를 Manipulation 객체에 통합
-        call([pitch_tier, manipulation], "Replace pitch tier")
-
-        # 변조된 음성을 재합성
-        manipulated_sound = call(manipulation, "Get resynthesis (overlap-add)")
-        manipulated_sound.save(output_wav_path, 'WAV')
-        logger.info(f"[RUN] 삼차 스플라인 합성 음성을 저장했습니다: {output_wav_path}")
-
-    def apply_cubic_spline(self, simplified_times, simplified_f0_values, num_points=100):
-        """
-        F0 목표점 최소화 포인트를 대상으로 3차 스플라인을 적용하여 값을 반환합니다.
-
-        Parameters:
-            simplified_times (list): F0 목표점 최소화 포인트의 시간 리스트.
-            simplified_f0_values (list): F0 목표점 최소화 포인트의 F0 값 리스트.
-            num_points (int): 스플라인 윤곽을 계산할 샘플 포인트 수.
-
-        Returns:
-            tuple: (interpolated_times, interpolated_f0)
-                - interpolated_times: 스플라인으로 계산된 시간 리스트.
-                - interpolated_f0: 스플라인으로 계산된 F0 값 리스트.
-        """
-        # 3차 스플라인 계산
-        spline = CubicSpline(simplified_times, simplified_f0_values, bc_type='natural')
-        interpolated_times = np.linspace(min(simplified_times), max(simplified_times), num_points)
-        interpolated_f0 = spline(interpolated_times)
-
-        return interpolated_times, interpolated_f0
-
-    def apply_momel_pitch_modulation(self, points_tier_name, modified_wav_path,
-                                     minimalized_wav_path, minimalized_image_path,
-                                     corrected_wav_path, corrected_image_path,
-                                     spline_image_path, spline_wav_path,
-                                     percentage_image_path):
-        """
-        Momel의 Points 티어를 기반으로 첫 번째 변조를 수행하고, F0 목표점 최소화 포인트로 두 번째 변조 및 그래프를 생성합니다.
-
-        Parameters:
-            points_tier_name (str): 변조에 사용할 Momel의 Points 티어 이름.
-            modified_wav_path (str): 첫 번째 변조된 음성의 출력 파일 경로.
-            minimalized_wav_path (str): 단순화 후 두 번째 변조된 음성의 출력 파일 경로.
-            minimalized_image_path (str): F0 목표점 최소화 포인트 그래프의 출력 이미지 파일 경로.
-            corrected_wav_path (str): Doubling/Halving 제거 후 음성의 출력 파일 경로.
-            corrected_image_path (str): Doubling/Halving 제거 후 그래프의 출력 이미지 파일 경로.
-        """
-        points_tier = next((tier for tier in self.textgrid.tiers if tier.name == points_tier_name), None)
-        if points_tier:
-            # Momel Points 티어에서 시간과 음높이 값을 가져옴
-            times, f0_values = self.get_momel_pitch_points(points_tier)
-
-            # # 첫 번째 변조된 음성 생성
-            # self.synthesize_pitch_modified_wav(modified_wav_path, times, f0_values)
-
-            # 기울기 기반 목표점 최소화 적용
-            simplified_times, simplified_f0_values = self.simplify_pitch_points_by_slope(times, f0_values)
-
-            # 목표점 최소화 음높이 포인트 그래프 저장
-            self.plot_simplified_pitch_contour(simplified_times, simplified_f0_values, minimalized_image_path)
-
-            # 목표점 최소화 음높이로 두 번째 변조된 음성 생성
-            if self.settings['is_synthesis_save']:
-                self.synthesize_pitch_modified_wav(minimalized_wav_path, simplified_times, simplified_f0_values)
-
-            # 최종 음높이 포인트 percentage로 저장
-            self.add_percentage_points_tier(simplified_times, simplified_f0_values)
-            
-            # 백분율 그래프 산출
-            self.plot_percentage_pitch_contour(simplified_times, simplified_f0_values, percentage_image_path)
-            
-            # Points 티어를 보정된 데이터로 업데이트
-            points_tier.points.clear()
-            for time, f0 in zip(simplified_times, simplified_f0_values):
-                points_tier.add(time, f"{f0:.2f}")
-                
-            # 3차 스플라인 적용 및 결과 출력
-            spline_times, spline_f0_values = self.apply_cubic_spline(simplified_times, simplified_f0_values)
-            
-            # 스플라인 음높이 포인트 그래프 저장
-            if self.settings['show_spline']:
-                self.plot_spline_contour(spline_times, spline_f0_values, spline_image_path, simplified_times, simplified_f0_values)
-
-            # 3차 스플라인 기반으로 WAV 파일 생성
-            if self.settings['is_spline_syntheis_save']:
-                self.synthesize_spline_modified_wav(spline_wav_path, spline_times, spline_f0_values)
-
-
-    def remove_doubling_halving(
-            self,
-            times,
-            f0_values,
-            threshold_ratio=0.5,
-            min_stable_count=9,
-            global_deviation_factor=2.0
-        ):
-        """
-        Doubling/Halving 현상을 감지하되, '전체 구간 평균 f0'와 비교하여
-        초기에 지나치게 높은(또는 낮은) 값도 자동으로 걸러냅니다.
-
-        Notes:
-            - 안정 구간(stable region) 판정 전에는 temp_buffer에 쌓아두었다가,
-            min_stable_count개 모두 Doubling/Halving 범위 내에 있으면
-            그 지점부터 corrected에 추가.
-            - 안정 구간 진입 후에는 "가장 최근 0이 아닌 f0"와 현재 f0를 ratio로 비교해
-            Doubling/Halving인지 판정합니다.
-        """
-        if not f0_values:
-            return [], []
-
-        # 1) 전체 평균 f0(0 제외) 계산
-        nonzero_f0 = [fv for fv in f0_values if fv > 0]
-        if not nonzero_f0:
-            # 전부 무음이면 전부 제외
-            return [], []
-
-        global_avg_f0 = sum(nonzero_f0) / len(nonzero_f0)
-
-        corrected_times = []
-        corrected_f0_values = []
-
-        stable_start_index = None
-        temp_buffer = []  # (t, f) 임시 버퍼
-
-        for i in range(len(f0_values)):
-            t = times[i]
-            f = f0_values[i]
-
-            # 0Hz인 경우: 안정 구간 전이라면 버리고, 안정 구간 이후라면 그냥 Doubling/Halving 검사를 건너뜀
-            # (0은 ratio 계산할 수 없으니)
-            if f <= 0:
-                if stable_start_index is None:
-                    continue
-                else:
-                    # 안정 구간 진입 후라도, 0Hz는 ratio 비교 없이 그대로 추가할 수도 있음
-                    # 필요에 따라 처리 로직을 달리할 수 있음
-                    corrected_times.append(t)
-                    corrected_f0_values.append(f)
-                    continue
-
-            # 아직 안정 구간이 아닌 상태에서 "글로벌 평균 x factor"보다 큰 값이면 제외
-            if stable_start_index is None and (f > global_avg_f0 * global_deviation_factor):
-                continue
-
-            # 안정 구간 찾기 전
-            if stable_start_index is None:
-                # 일단 버퍼에 쌓는다
-                temp_buffer.append((t, f))
-
-                # 버퍼가 min_stable_count 이상 차면 Doubling/Halving 연속검사
-                if len(temp_buffer) >= min_stable_count:
-                    all_stable = True
-                    for j in range(1, len(temp_buffer)):
-                        prev_f0 = temp_buffer[j-1][1]
-                        curr_f0 = temp_buffer[j][1]
-                        # 둘 다 0보다 큰 경우만 ratio 검사
-                        if prev_f0 > 0 and curr_f0 > 0:
-                            ratio = curr_f0 / prev_f0
-                            if not (threshold_ratio <= ratio <= 1.0 / threshold_ratio):
-                                all_stable = False
-                                break
-                    if all_stable:
-                        # 안정 구간에 돌입
-                        stable_start_index = i - (min_stable_count - 1)
-                        # 버퍼 내용을 통째로 corrected에 옮긴다
-                        for (bt, bf) in temp_buffer:
-                            corrected_times.append(bt)
-                            corrected_f0_values.append(bf)
-                        temp_buffer.clear()
-
-            else:
-                # 안정 구간 진입 이후
-                # 1) "가장 최근 0이 아닌 f0" 찾기
-                prev_f0 = 0
-                for val in reversed(corrected_f0_values):
-                    if val != 0:
-                        prev_f0 = val
-                        break
-
-                # 2) Doubling/Halving 검사
-                if prev_f0 > 0 and f > 0:
-                    ratio = f / prev_f0
-                    if not (threshold_ratio <= ratio <= 1.0 / threshold_ratio):
-                        # Doubling/Halving 의심 → 버림
-                        continue
-
-                # 정상 → 추가
-                corrected_times.append(t)
-                corrected_f0_values.append(f)
-
-        return corrected_times, corrected_f0_values
-
+    # ── 메인 실행 ──
 
     def run(self):
-        """
-        전체 전사 프로세스 실행
-        """
-        # 출력 파일 경로 설정
-        output_pitch_contour = os.path.splitext(self.output_textgrid)[0] + "_pitch_contour.jpg"
-        output_momel_pitch_contour = os.path.splitext(self.output_textgrid)[0] + "_momel_pitch_contour.jpg"
-        output_momel_pitch_contour_minimalized = os.path.splitext(self.output_textgrid)[0] + "_momel_pitch_contour_minimalized.jpg"
-        output_percentage_contour = os.path.splitext(self.output_textgrid)[0] + "_momel_pitch_percentage.jpg"
-        modified_wav_path = os.path.splitext(self.output_textgrid)[0] + "_modified.wav"
-        modified_minimalization_wav_path = os.path.splitext(self.output_textgrid)[0] + "_modified_minimalization.wav"
-        corrected_wav_path = os.path.splitext(self.output_textgrid)[0] + "_corrected_doubling_halving.wav"
-        corrected_image_path = os.path.splitext(self.output_textgrid)[0] + "_corrected_doubling_halving_contour.jpg"
-        spline_image_path = os.path.splitext(self.output_textgrid)[0] + "_spline_contour.jpg"
-        spline_wav_path = os.path.splitext(self.output_textgrid)[0] + "_spline_contour.wav"
-
-        # 모든 출력 파일이 존재하는 경우, 건너뜁니다.
-        if (os.path.exists(self.output_textgrid) and 
-            os.path.exists(output_pitch_contour) and 
-            os.path.exists(output_momel_pitch_contour) and
-            os.path.exists(output_momel_pitch_contour_minimalized) and
-            os.path.exists(modified_minimalization_wav_path) and 
-            os.path.exists(corrected_image_path)):
-            logger.info(f"[RUN] 모든 출력 파일이 이미 존재하여 건너뜁니다: {self.output_textgrid}")
+        """전체 전사 프로세스를 실행합니다."""
+        # 이미 모든 결과물이 있으면 건너뛰기
+        required_outputs = [
+            self.output_textgrid,
+            self._output_path("_pitch_contour.jpg"),
+            self._output_path("_momel_pitch_contour.jpg"),
+            self._output_path("_momel_pitch_contour_minimalized.jpg"),
+            self._output_path("_modified_minimalization.wav"),
+            self._output_path("_corrected_doubling_halving_contour.jpg"),
+        ]
+        if all(os.path.exists(p) for p in required_outputs):
+            logger.info(
+                f"[RUN] 모든 출력 파일이 이미 존재하여 건너뜁니다: {self.output_textgrid}"
+            )
             return
 
         try:
-            # 기본 전사 및 TextGrid 생성
+            # 1) TextGrid 생성 (정렬 데이터 반영)
             self.create_textgrid()
+
             if self.settings['is_only_alignment']:
                 self.save_textgrid()
                 return
-            self.run_momel_based_labels()
-            self.add_tcog_tier()
 
-            # 기본 음높이와 Momel 기반 그래프 생성
-            pitch = self.extract_pitch(sex=self.sex)
-            self.plot_pitch_and_textgrid(pitch)
-            self.plot_momel_pitch_points()
-            
-            # Momel의 Points 티어를 기반으로 변조 및 단순화 적용
-            self.apply_momel_pitch_modulation(points_tier_name="Points",
-                                            modified_wav_path=modified_wav_path,
-                                            minimalized_wav_path=modified_minimalization_wav_path,
-                                            minimalized_image_path=output_momel_pitch_contour_minimalized,
-                                            corrected_wav_path=corrected_wav_path,
-                                            corrected_image_path=corrected_image_path,
-                                            spline_image_path=spline_image_path,
-                                            spline_wav_path=spline_wav_path,
-                                            percentage_image_path=output_percentage_contour)
+            # 2) 피치 추출 (한 번만)
+            pitch = extract_pitch(self.sound, self.sex, self.settings)
+
+            # 3) Momel 기반 Points 티어 생성
+            corrected_times, corrected_f0 = generate_momel_labels(
+                self.sound, pitch, self.settings, self.textgrid, self.duration,
+            )
+
+            # 4) Doubling/Halving 제거 그래프
+            plot_corrected_contour(
+                corrected_times, corrected_f0,
+                self._output_path("_corrected_doubling_halving_contour.jpg"),
+                self.textgrid, self.fontprop,
+            )
+
+            # 5) TCoG
+            self.add_tcog_tier(pitch)
+
+            # 6) 원시 음높이 그래프
+            pitch_times, pitch_f0 = extract_pitch_data(pitch)
+            plot_pitch_contour(
+                pitch_times, pitch_f0,
+                self._output_path("_pitch_contour.jpg"),
+                self.textgrid, self.fontprop,
+                show_spline=self.settings['show_spline'],
+            )
+
+            # 7) Momel 포인트 그래프
+            plot_momel_points(
+                self.textgrid,
+                self._output_path("_momel_pitch_contour.jpg"),
+                self.fontprop,
+            )
+
+            # 8) 목표점 최소화 · 스플라인 · 합성
+            self._apply_momel_modulation(pitch)
+
+            # 9) 최종 저장
             self.save_textgrid()
+
         except Exception as e:
             logger.error(f"억양 전사 중 오류 발생: {e}")
             logger.error(traceback.format_exc())
-            return
 
-def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_path=MOMEL_PATH):
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 멀티프로세싱 워커
+# ─────────────────────────────────────────────────────────────────────────────
+
+_worker_settings = None
+_worker_momel_path = None
+
+
+def _init_worker(settings, momel_path):
+    """멀티프로세싱 워커 초기화 (각 프로세스 시작 시 1회 호출)."""
+    global _worker_settings, _worker_momel_path
+    _worker_settings = settings
+    _worker_momel_path = momel_path
+
+    import matplotlib
+    matplotlib.use('Agg')
+
+
+def _process_single_file(task):
     """
-    TSV 파일을 읽어 전체 파일 목록에 대해 MFA 배치 정렬을 먼저 수행하고,
-    각 정렬 결과를 IntonationTranscriber에 전달하여 후속 처리를 진행합니다.
+    단일 파일 처리 워커 함수.
+
+    Args:
+        task: (info_dict, alignment_dict) 튜플
+
+    Returns:
+        (success: bool, wav_path: str, error_msg: str | None)
+    """
+    global _worker_settings, _worker_momel_path
+
+    info, alignment = task
+    wav_path = info["wav_path"]
+
+    try:
+        transcriber = IntonationTranscriber(
+            wav_file=str(wav_path),
+            transcript=info["transcript"],
+            sex=info["sex"],
+            output_textgrid=info["output_textgrid"],
+            settings=_worker_settings,
+            momel_path=_worker_momel_path,
+        )
+        transcriber.alignment = alignment
+        transcriber.run()
+        return (True, wav_path, None)
+    except Exception as e:
+        return (False, wav_path, f"{e}\n{traceback.format_exc()}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 파일 오케스트레이션
+# ─────────────────────────────────────────────────────────────────────────────
+
+def process_files(
+    tsv_file: str,
+    output_dir: str,
+    stop_flag,
+    runner=None,
+    momel_path=MOMEL_PATH,
+    wav_root_dir: str = "data/source-audio",
+    save_dir: str = "out/results",
+    n_jobs: int = 4,
+):
+    """
+    TSV 파일을 읽어 MFA 배치 정렬 → 멀티프로세싱 억양 전사를 수행합니다.
+
+    Parameters
+    ----------
+    tsv_file : str      – 입력 TSV 파일 경로
+    output_dir : str    – (하위 호환) save_dir 사용 권장
+    stop_flag : Event   – 중지 플래그
+    runner : object     – 프론트엔드 Runner (current_aligner 전달용)
+    momel_path : str
+    wav_root_dir : str  – 오디오 파일 루트
+    save_dir : str      – 결과 저장 루트
+    n_jobs : int        – 병렬 프로세스 수
     """
     logger.info(f"[FILE] 입력 파일을 처리합니다: {os.path.basename(tsv_file)}")
-    os.makedirs(output_dir, exist_ok=True)
-    settings = IntonationTranscriber.load_config(config_path=CONFIG_PATH, momel_path=momel_path)
-    
-    # WAV 파일 목록을 준비합니다.
-    wav_root_dir = "out"  # wav 파일이 있는 상대 경로
+    logger.info(f"[FILE] WAV 파일 경로: {wav_root_dir}")
+    logger.info(f"[FILE] 저장 경로: {save_dir}")
+    logger.info(f"[FILE] 병렬 처리 프로세스 수: {n_jobs}")
+    os.makedirs(save_dir, exist_ok=True)
+
+    settings = load_config(config_path=CONFIG_PATH, momel_path=momel_path)
     wav_dict = collect_wav_files(wav_root_dir)
 
-    pairs = []  # (wav_path, transcript) 목록
-    info_list = []  # 각 파일에 대한 추가 정보 (예: sex, output_textgrid)
+    # ── TSV 읽기 → (wav_path, transcript) 쌍 구성 ──
+    pairs = []
+    info_list = []
     try:
         delimiter = detect_delimiter(tsv_file)
-        with open(tsv_file, 'r', encoding='utf-8') as f:
+        with open(tsv_file, 'r', encoding='utf-8-sig') as f:
             reader = csv.DictReader(f, delimiter=delimiter)
             for row in reader:
                 if stop_flag.is_set():
                     logger.info("[RUN] 처리 중지 요청이 감지되어 작업을 중단합니다")
                     return
+
                 wav_file_name = row.get("filename", "").strip()
+                file_ext = os.path.splitext(wav_file_name)[1].lower()
+                if file_ext not in SUPPORTED_AUDIO_EXTENSIONS:
+                    wav_file_name = f"{wav_file_name}.wav"
+
                 transcript = row.get("text", "")
                 sex = row.get("sex", "")
+
                 if wav_file_name not in wav_dict:
-                    logger.warning(f"[FILE] WAV 파일을 찾을 수 없습니다: {wav_file_name}")
+                    logger.warning(f"[FILE] 오디오 파일을 찾을 수 없습니다: {wav_file_name}")
                     continue
+
                 wav_file_path = wav_dict[wav_file_name]
+                try:
+                    wav_file_path = ensure_wav(wav_file_path)
+                except Exception as e:
+                    logger.error(f"[FILE] 오디오 변환 실패, 건너뜁니다: {wav_file_name} ({e})")
+                    continue
+
                 base_name = os.path.splitext(os.path.basename(wav_file_path))[0]
-                # 출력 디렉토리 생성
-                out_subdir = f"{output_dir}/{base_name.split('.')[0]}"
+                out_subdir = f"{save_dir}/{base_name.split('.')[0]}"
                 os.makedirs(out_subdir, exist_ok=True)
                 output_textgrid = os.path.join(out_subdir, f"{base_name}_{sex}.TextGrid")
+
                 pairs.append((wav_file_path, transcript))
                 info_list.append({
                     "wav_path": wav_file_path,
                     "sex": sex,
                     "output_textgrid": output_textgrid,
-                    "transcript": transcript
+                    "transcript": transcript,
                 })
     except Exception as e:
         logger.error(f"[FILE] 파일을 준비하는 도중 에러 발생:\n{traceback.format_exc()}")
@@ -1103,11 +545,13 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_
         logger.info("[FILE] 처리할 파일이 없습니다")
         return
 
+    logger.info(f"[FILE] 총 {len(pairs)}개 파일 준비 완료")
+
+    # ── MFA 배치 정렬 ──
     aligner = MFAAligner()
-    
     if runner is not None:
-        runner.current_aligner = aligner 
-        
+        runner.current_aligner = aligner
+
     try:
         grid_dict = aligner.align_batch(pairs, stop_flag=stop_flag)
     except Exception as e:
@@ -1115,76 +559,132 @@ def process_files(tsv_file: str, output_dir: str, stop_flag, runner=None, momel_
         logger.error(traceback.format_exc())
         return
     finally:
-        # 작업이 끝났거나 예외가 나도 cleanup 작업을 수행합니다.
         if runner is not None:
             runner.current_aligner = None
-            
-    
-    total = len(info_list)
-    LOG_EVERY = 5
-    # 배치 정렬 결과(grid_dict)는 파일명(stem)을 key로 함
-    with tqdm_logging_redirect(logger):
-        for idx, info in enumerate(
-                    tqdm(info_list, desc="Transcribing",
-                        unit="file", ascii=True,
-                        mininterval=1.0, dynamic_ncols=False),
-                    start=1):
-            
-            if stop_flag.is_set():
-                logger.info("[RUN] 처리 중지 요청이 감지되어 작업을 중단합니다")
-                break
-            if idx == 1 or idx % LOG_EVERY == 0 or idx == total:
-                pct = 100 * idx / total
-                logger.info(f"[PROGRESS] {idx}/{total} ({pct:5.1f} %)")
-                
-            wav_path = Path(info["wav_path"]).expanduser().resolve()
-            base     = wav_path.stem
-            output_textgrid = info["output_textgrid"]
-            sex = info["sex"]
-            tg       = grid_dict.get(base)
-            # IntonationTranscriber 생성 시 미리 정렬 결과를 전달합니다.
-            transcriber = IntonationTranscriber(
-                wav_file=str(wav_path),
-                transcript=info["transcript"],
-                sex=sex,
-                output_textgrid=output_textgrid,
-                settings=settings,
-                momel_path=momel_path
-            )
-            # MFAAligner에서 얻은 TextGrid 정렬 결과를 주입
-            transcriber.alignment = tg_to_alignment(tg, info["transcript"])
 
-            logger.info(f"[RUN] 처리 중: {wav_path}")
-            try:
-                transcriber.run()
-            except Exception as e:
-                logger.error(f"[RUN] 오류 건너뜀: {wav_path}")
-                logger.error(traceback.format_exc())
-                continue
-    
     if stop_flag.is_set():
+        logger.info("[RUN] 처리 중지 요청이 감지되어 작업을 중단합니다")
         return
+
+    # ── 태스크 구성 ──
+    tasks = []
+    skipped_count = 0
+    for info in info_list:
+        wav_path = Path(info["wav_path"]).expanduser().resolve()
+        tg = grid_dict.get(wav_path.stem)
+
+        if tg is None:
+            logger.warning(f"[RUN] MFA 정렬 결과 없음 (건너뜀): {wav_path}")
+            skipped_count += 1
+            continue
+
+        alignment = tg_to_alignment(tg, info["transcript"])
+        tasks.append((info, alignment))
+
+    if skipped_count > 0:
+        logger.warning(f"[RUN] MFA 정렬 결과 없음으로 건너뛴 파일: {skipped_count}개")
+
+    if not tasks:
+        logger.info("[FILE] 처리할 태스크가 없습니다")
+        return
+
+    total = len(tasks)
+    logger.info(f"[RUN] {total}개 파일에 대해 {n_jobs}개 프로세스로 병렬 처리를 시작합니다...")
+
+    # ── 멀티프로세싱 실행 ──
+    success_count = 0
+    error_count = 0
+    LOG_EVERY = max(1, total // 100)
+
+    ctx = mp.get_context('spawn')
+
+    try:
+        with ctx.Pool(
+            processes=n_jobs,
+            initializer=_init_worker,
+            initargs=(settings, momel_path),
+        ) as pool:
+            results = pool.imap_unordered(_process_single_file, tasks, chunksize=10)
+
+            with tqdm_logging_redirect(logger):
+                for idx, result in enumerate(
+                    tqdm(results, total=total, desc="Transcribing",
+                         unit="file", ascii=True,
+                         mininterval=1.0, dynamic_ncols=False),
+                    start=1,
+                ):
+                    success, wav_path, error_msg = result
+
+                    if success:
+                        success_count += 1
+                    else:
+                        error_count += 1
+                        logger.error(f"[RUN] 오류 발생: {wav_path}")
+                        logger.error(error_msg)
+
+                    if idx == 1 or idx % LOG_EVERY == 0 or idx == total:
+                        pct = 100 * idx / total
+                        logger.info(
+                            f"[PROGRESS] {idx}/{total} ({pct:5.1f}%) "
+                            f"- 성공: {success_count}, 실패: {error_count}"
+                        )
+
+                    if stop_flag.is_set():
+                        logger.info("[RUN] 처리 중지 요청이 감지되어 작업을 중단합니다")
+                        pool.terminate()
+                        break
+
+    except KeyboardInterrupt:
+        logger.info("[RUN] 키보드 인터럽트로 작업을 중단합니다")
+        return
+    except Exception as e:
+        logger.error(f"[RUN] 멀티프로세싱 중 오류 발생: {e}")
+        logger.error(traceback.format_exc())
+        return
+
+    # ── 결과 요약 ──
+    if stop_flag.is_set():
+        logger.info(
+            f"[RUN] 작업이 중단되었습니다. "
+            f"처리 완료: {success_count}, 실패: {error_count}"
+        )
     else:
-        logger.info("[RUN] 모든 파일 처리가 완료되었습니다")
+        logger.info(
+            f"[RUN] 모든 파일 처리가 완료되었습니다. "
+            f"성공: {success_count}, 실패: {error_count}, 건너뜀: {skipped_count}"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLI 엔트리 포인트
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
     import argparse
     from threading import Event
 
     parser = argparse.ArgumentParser(description="억양 자동 주석 도구 (TSV 입력)")
-    parser.add_argument("tsv_file", type=str, nargs='?', default="tests/samples/input.tsv",
-                        help="입력 TSV 파일 경로 (wavfile_path와 text 컬럼 포함)")
-    parser.add_argument("output_dir", type=str, nargs='?', default='out',
-                        help="출력 TextGrid 파일들이 저장될 디렉토리 경로, out경로에 입력 대상 wav 파일이 있어야 합니다.")
+    parser.add_argument(
+        "tsv_file", type=str, nargs='?',
+        default="data/133_parsed_output_sample.tsv",
+        help="입력 TSV 파일 경로 (wavfile_path와 text 컬럼 포함)",
+    )
+    parser.add_argument("--wav_root_dir", type=str, default='data/source-audio',
+                        help="WAV 파일이 있는 디렉토리 경로")
+    parser.add_argument("--save_dir", type=str, default='out/results',
+                        help="출력 TextGrid 파일들이 저장될 디렉토리 경로")
+    parser.add_argument("--n_jobs", type=int, default=4,
+                        help="병렬 처리할 프로세스 수 (기본값: 4)")
 
     args = parser.parse_args()
-
-    # 중지 플래그 생성
     stop_flag = Event()
 
     process_files(
         tsv_file=args.tsv_file,
-        output_dir=args.output_dir,
-        stop_flag=stop_flag,  # 중지 플래그 전달
+        output_dir=args.save_dir,
+        stop_flag=stop_flag,
         runner=None,
+        wav_root_dir=args.wav_root_dir,
+        save_dir=args.save_dir,
+        n_jobs=args.n_jobs,
     )
