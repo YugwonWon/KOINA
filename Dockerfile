@@ -64,7 +64,9 @@ RUN ${CONDA_DIR}/bin/conda install -n mfa -y \
     ${CONDA_DIR}/bin/conda clean -afy
 
 # 나머지 conda 패키지 설치
+# setuptools: praatio 가 pkg_resources 를 사용하므로 반드시 필요
 RUN ${CONDA_DIR}/bin/conda install -n mfa -y \
+        setuptools \
         numpy pandas scipy matplotlib tqdm \
         textgrid pydub ffmpeg-python && \
     ${CONDA_DIR}/bin/conda clean -afy
@@ -92,6 +94,9 @@ COPY --chown=mfauser:mfauser src/ ./src/
 COPY --chown=mfauser:mfauser entrypoint.sh /entrypoint.sh
 RUN chown -R mfauser:mfauser /koina
 RUN chmod +x /entrypoint.sh
+
+# setuptools>=74 에서 pkg_resources 제거됨 → praatio 호환을 위해 다운그레이드 (root 권한 필요)
+RUN /opt/conda/bin/conda run -n mfa pip install --force-reinstall 'setuptools<74'
 
 ########################
 # 5. 모델 다운로드  (mfauser)
