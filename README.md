@@ -153,8 +153,17 @@ out/
 ```bash
    python ./src/transcribe/transcriber.py \
     data/input.tsv \
-    out \
+    --wav_root_dir data/source-audio \
+    --save_dir out/results \
+    --n_jobs 4
 ```
+
+| 인자 | 설명 | 기본값 |
+|------|------|--------|
+| `tsv_file` (위치 인자) | 입력 TSV 파일 경로 (`filename`, `sex`, `text` 컬럼 포함) | `data/133_parsed_output_sample.tsv` |
+| `--wav_root_dir` | WAV 파일이 있는 디렉토리 경로 | `data/source-audio` |
+| `--save_dir` | 출력 TextGrid 파일들이 저장될 디렉토리 경로 | `out/results` |
+| `--n_jobs` | 병렬 처리할 프로세스 수 | `4` |
 
 ---
 
