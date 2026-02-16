@@ -5,6 +5,11 @@ out/
 *.f0
 *.model
 .DS_Store
+tests/**/*.wav
+tests/**/*.TextGrid
+tests/**/*.png
+tests/**/*.jpg
+tests/**/*.tsv
 
 # 실행 로그 / 출력물
 nohup*.out
