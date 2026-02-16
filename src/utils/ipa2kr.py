@@ -513,7 +513,7 @@ def _g2p_align_word(w_text, word_pis, phones):
     if cursor < len(word_pis):
         ok = False
 
-    if not ok or not syl_result:
+    if not syl_result:
         return False, None, None
 
     # 결과 구성
@@ -530,7 +530,281 @@ def _g2p_align_word(w_text, word_pis, phones):
                 'text':  orig_char
             })
 
-    return True, assignments, syllables
+    # 부분 정렬: ok=False 이면 성공한 음절까지만 반환 (caller 가 나머지를 fallback)
+    return ok, assignments, syllables
+
+
+def _make_syl_specs(text):
+    """텍스트(또는 문자 리스트)를 음절 스펙 [(char, [(pos, jamo), ...]), ...] 으로 분해합니다."""
+    from utils.jamo import (decompose_hangul, is_hangul,
+                            CHOSUNG_LIST, JUNGSEONG_LIST, JONGSEONG_LIST)
+    specs = []
+    for ch in text:
+        if is_hangul(ch):
+            cho_i, jung_i, jong_i = decompose_hangul(ch)
+            if cho_i is None:
+                specs.append((ch, [('other', ch)]))
+                continue
+            cho  = CHOSUNG_LIST[cho_i]
+            jung = JUNGSEONG_LIST[jung_i]
+            jong = JONGSEONG_LIST[jong_i] if jong_i > 0 else None
+            parts = [('onset', cho), ('nucleus', jung)]
+            if jong:
+                if jong in _DOUBLE_JONGSEONG:
+                    j1, j2 = _DOUBLE_JONGSEONG[jong]
+                    parts.append(('coda', j1))
+                    parts.append(('coda2', j2))
+                else:
+                    parts.append(('coda', jong))
+            specs.append((ch, parts))
+        else:
+            specs.append((ch, [('other', ch)]))
+    return specs
+
+
+def _try_greedy(syl_specs, word_pis, phones):
+    """
+    음절 스펙에 대해 greedy alignment을 시도합니다.
+
+    Returns:
+        syl_result:  [(syl_char, [(phone_idx, kr_label)])]
+        ok:          bool — 전체 성공 여부
+    """
+    cursor = 0
+    j_consumed = False
+    ok = True
+    syl_result = []
+
+    for syl_char, parts in syl_specs:
+        syl_phones = []
+
+        for pos, jamo in parts:
+            if pos == 'onset' and jamo == 'ㅇ':
+                j_consumed = False
+                continue
+
+            if pos == 'onset':
+                if cursor >= len(word_pis):
+                    ok = False; break
+                pi = word_pis[cursor]
+                pt = phones[pi]['text']
+                if _is_vowel_ipa(pt):
+                    ok = False; break
+                j_consumed = (pt == 'ɲ')
+                syl_phones.append((pi, jamo))
+                cursor += 1
+
+            elif pos == 'nucleus':
+                glide = _DIPHTHONG_GLIDE.get(jamo)
+
+                if glide and not j_consumed:
+                    if cursor >= len(word_pis):
+                        ok = False; break
+                    pi = word_pis[cursor]
+                    pt = phones[pi]['text']
+                    if not _is_vowel_ipa(pt) and pt not in _GLIDE_IPA:
+                        ok = False; break
+                    if pt in _GLIDE_IPA and cursor + 1 < len(word_pis):
+                        pi2 = word_pis[cursor + 1]
+                        syl_phones.append((pi, jamo))
+                        syl_phones.append((pi2, None))
+                        cursor += 2
+                    else:
+                        syl_phones.append((pi, jamo))
+                        cursor += 1
+
+                elif glide and j_consumed:
+                    if cursor >= len(word_pis):
+                        ok = False; break
+                    pi = word_pis[cursor]
+                    pt = phones[pi]['text']
+                    if not _is_vowel_ipa(pt):
+                        ok = False; break
+                    syl_phones.append((pi, jamo))
+                    cursor += 1
+                    j_consumed = False
+
+                else:
+                    if cursor >= len(word_pis):
+                        ok = False; break
+                    pi = word_pis[cursor]
+                    pt = phones[pi]['text']
+                    if not _is_vowel_ipa(pt) and pt not in _GLIDE_IPA:
+                        ok = False; break
+                    syl_phones.append((pi, jamo))
+                    cursor += 1
+                    j_consumed = False
+
+            elif pos in ('coda', 'coda2'):
+                if cursor < len(word_pis):
+                    pi = word_pis[cursor]
+                    pt = phones[pi]['text']
+                    if _is_vowel_ipa(pt):
+                        pass
+                    else:
+                        syl_phones.append((pi, jamo))
+                        cursor += 1
+
+            elif pos == 'other':
+                if cursor < len(word_pis):
+                    pi = word_pis[cursor]
+                    syl_phones.append((pi, jamo))
+                    cursor += 1
+
+        if not ok:
+            break
+        syl_result.append((syl_char, syl_phones))
+
+    if cursor < len(word_pis):
+        ok = False
+
+    return syl_result, ok
+
+
+def _fill_spn_gaps(w_text, phones, assignment, syllables, w_start, w_end, spn_expansion):
+    """
+    어절 내 spn 구간에 해당하는 누락 음절/자모를 텍스트 기반으로 후보정합니다.
+
+    greedy/G2P 정렬이 비-spn 음소에 대해 완료된 후 호출합니다.
+    spn 구간에 속할 음절을 찾아 시간 비례 분할하여 syllables 와 spn_expansion 에 추가합니다.
+
+    Args:
+        w_text:         어절 텍스트 (한글)
+        phones:         전체 phone 리스트
+        assignment:     phone_idx → 한글 라벨 (in-place)
+        syllables:      음절 리스트 (in-place)
+        w_start, w_end: 어절 시간 범위
+        spn_expansion:  {phone_idx: [(start, end, label), ...]}  (in-place)
+    """
+    from utils.jamo import (decompose_hangul, is_hangul,
+                            CHOSUNG_LIST, JUNGSEONG_LIST, JONGSEONG_LIST)
+
+    expected_chars = [ch for ch in w_text if is_hangul(ch)]
+    if not expected_chars:
+        return
+
+    # ── 어절 내 spn 구간 수집 ──
+    spn_phones = []
+    for pi, p in enumerate(phones):
+        pt = (p.get('text', '') or '').strip()
+        if pt == 'spn' and p['start'] >= w_start - _EPS and p['end'] <= w_end + _EPS:
+            spn_phones.append((pi, p))
+    if not spn_phones:
+        return
+
+    # ── 이미 매칭된 음절 목록 (시간순) ──
+    word_syls = sorted(
+        [s for s in syllables
+         if s['start'] >= w_start - _EPS and s['end'] <= w_end + _EPS],
+        key=lambda s: s['start']
+    )
+    if len(word_syls) >= len(expected_chars):
+        return                      # 음절 모두 존재
+
+    # ── expected ↔ matched 순서보존 매핑 ──
+    matched_positions = []          # expected 내 인덱스
+    search_from = 0
+    for ms in word_syls:
+        for i in range(search_from, len(expected_chars)):
+            if expected_chars[i] == ms['text']:
+                matched_positions.append(i)
+                search_from = i + 1
+                break
+
+    covered = set(matched_positions)
+    missing_indices = [i for i in range(len(expected_chars)) if i not in covered]
+    if not missing_indices:
+        return
+
+    # ── 연속 누락 그룹 ──
+    groups = []
+    cur_grp = [missing_indices[0]]
+    for idx in missing_indices[1:]:
+        if idx == cur_grp[-1] + 1:
+            cur_grp.append(idx)
+        else:
+            groups.append(cur_grp)
+            cur_grp = [idx]
+    groups.append(cur_grp)
+
+    # ── 각 누락 그룹을 spn 구간에 매핑 ──
+    used_spn = set()
+    for group in groups:
+        missing_chars = [expected_chars[i] for i in group]
+
+        # 그룹 앞뒤 시간 범위 결정
+        prev_end   = w_start
+        next_start = w_end
+        for mp_idx, mp in enumerate(matched_positions):
+            if mp < group[0]:
+                prev_end = max(prev_end, word_syls[mp_idx]['end'])
+        for mp_idx, mp in enumerate(matched_positions):
+            if mp > group[-1]:
+                next_start = min(next_start, word_syls[mp_idx]['start'])
+                break
+
+        # 시간 범위와 겹치는 spn 모두 수집 (연속 spn 병합)
+        target_spns = []
+        for pi, p in spn_phones:
+            if pi in used_spn:
+                continue
+            if p['end'] > prev_end - _EPS and p['start'] < next_start + _EPS:
+                target_spns.append((pi, p))
+                used_spn.add(pi)
+        if not target_spns:
+            for pi, p in spn_phones:
+                if pi not in used_spn:
+                    target_spns.append((pi, p))
+                    used_spn.add(pi)
+                    break
+        if not target_spns:
+            continue
+
+        # 병합된 spn 시간 범위
+        first_spn_pi = target_spns[0][0]
+        spn_start = min(p['start'] for _, p in target_spns)
+        spn_end   = max(p['end']   for _, p in target_spns)
+        n_chars   = len(missing_chars)
+        dur_each  = (spn_end - spn_start) / n_chars
+
+        # ── 시간 비례 분할 → syllables + phoneme_kr 자모 ──
+        jamo_entries = []
+        for k, ch in enumerate(missing_chars):
+            sub_start = spn_start + k * dur_each
+            # float 정밀도: 마지막 항목은 spn_end 를 정확히 사용
+            sub_end   = spn_end if k == n_chars - 1 \
+                        else spn_start + (k + 1) * dur_each
+
+            syllables.append({'start': sub_start, 'end': sub_end, 'text': ch})
+
+            cho_i, jung_i, jong_i = decompose_hangul(ch)
+            if cho_i is not None:
+                cho  = CHOSUNG_LIST[cho_i]
+                jung = JUNGSEONG_LIST[jung_i]
+                jong = JONGSEONG_LIST[jong_i] if jong_i > 0 else None
+
+                jamo_parts = []
+                if cho != 'ㅇ':
+                    jamo_parts.append(cho)
+                jamo_parts.append(jung)
+                if jong:
+                    jamo_parts.append(jong)
+
+                n_parts  = max(1, len(jamo_parts))
+                part_dur = (sub_end - sub_start) / n_parts
+                t = sub_start
+                for j, jamo in enumerate(jamo_parts):
+                    t_end = sub_end if j == n_parts - 1 else t + part_dur
+                    jamo_entries.append((t, t_end, jamo))
+                    t = t_end
+            else:
+                jamo_entries.append((sub_start, sub_end, ch))
+
+        if jamo_entries:
+            # 첫 spn에 전체 자모 배정, 나머지 spn은 빈 리스트 (출력 생략 마커)
+            spn_expansion.setdefault(first_spn_pi, []).extend(jamo_entries)
+            for pi, _ in target_spns[1:]:
+                spn_expansion.setdefault(pi, [])   # 빈 리스트 = 출력 생략
 
 
 def build_kr_and_syllables(phones, words_restored):
@@ -557,6 +831,7 @@ def build_kr_and_syllables(phones, words_restored):
     # phone_idx → 보정된 한글 라벨 (None = 이중모음 병합 대상)
     assignment = {}
     syllables = []
+    spn_expansion = {}   # spn 후보정: {phone_idx: [(start, end, label), ...]}
 
     for word in words_restored:
         w_text = word.get('text', '')
@@ -580,147 +855,101 @@ def build_kr_and_syllables(phones, words_restored):
         if g2p_ok:
             assignment.update(g2p_assign)
             syllables.extend(g2p_syls)
+            _fill_spn_gaps(w_text, phones, assignment, syllables,
+                           w_start, w_end, spn_expansion)
+            continue
+
+        # ── G2P 부분 정렬 결과가 있으면 보존 후 나머지만 fallback ──
+        if g2p_assign is not None:
+            assignment.update(g2p_assign)
+            syllables.extend(g2p_syls)
+            unassigned_pis = [pi for pi in word_pis if pi not in assignment]
+            if unassigned_pis:
+                for pi in unassigned_pis:
+                    pt = phones[pi]['text']
+                    assignment[pi] = IPA2KR.get(pt, pt)
+                matched_count = len(g2p_syls)
+                hangul_remaining = [ch for ch in w_text if is_hangul(ch)][matched_count:]
+                remaining_specs = _make_syl_specs(hangul_remaining)
+                _fallback_syllables(remaining_specs, unassigned_pis, phones, syllables)
+            _fill_spn_gaps(w_text, phones, assignment, syllables,
+                           w_start, w_end, spn_expansion)
             continue
 
         # ── (fallback) 어절 텍스트 → 음절·자모 분해 ──
-        syl_specs = []  # list of (char, [(position, jamo)])
-        for ch in w_text:
-            if is_hangul(ch):
-                cho_i, jung_i, jong_i = decompose_hangul(ch)
-                if cho_i is None:
-                    syl_specs.append((ch, [('other', ch)]))
-                    continue
-                cho  = CHOSUNG_LIST[cho_i]
-                jung = JUNGSEONG_LIST[jung_i]
-                jong = JONGSEONG_LIST[jong_i] if jong_i > 0 else None
+        syl_specs = _make_syl_specs(w_text)
 
-                parts = [('onset', cho), ('nucleus', jung)]
-                if jong:
-                    if jong in _DOUBLE_JONGSEONG:
-                        j1, j2 = _DOUBLE_JONGSEONG[jong]
-                        parts.append(('coda', j1))
-                        parts.append(('coda2', j2))
-                    else:
-                        parts.append(('coda', jong))
-                syl_specs.append((ch, parts))
-            else:
-                syl_specs.append((ch, [('other', ch)]))
-
-        # ── greedy alignment ──
-        cursor = 0          # word_pis 내 커서
-        j_consumed = False   # ɲ(=/nj/) 초성이 j를 이미 포함했는지
-        ok = True
-        syl_result = []      # [(syl_char, [(phone_idx, kr_label)])]
-
-        for syl_char, parts in syl_specs:
-            syl_phones = []  # (phone_idx, label)
-
-            for pos, jamo in parts:
-                # ── 초성 ㅇ (무음) → phone 소비 없음 ──
-                if pos == 'onset' and jamo == 'ㅇ':
-                    j_consumed = False
-                    continue
-
-                # ── 초성 자음 ──
-                if pos == 'onset':
-                    if cursor >= len(word_pis):
-                        ok = False; break
-                    pi = word_pis[cursor]
-                    pt = phones[pi]['text']
-                    # 호환성: 초성에는 자음 IPA만 할당 가능
-                    if _is_vowel_ipa(pt):
-                        ok = False; break
-                    # ɲ는 /nj/를 인코딩 → 뒤의 j-이중모음에서 glide 소비 불필요
-                    j_consumed = (pt == 'ɲ')
-                    syl_phones.append((pi, jamo))
-                    cursor += 1
-
-                # ── 중성(모음) ──
-                elif pos == 'nucleus':
-                    glide = _DIPHTHONG_GLIDE.get(jamo)
-
-                    if glide and not j_consumed:
-                        # 이중모음: glide+vowel(2) 또는 단독 vowel(1)
-                        if cursor >= len(word_pis):
-                            ok = False; break
-                        pi = word_pis[cursor]
-                        pt = phones[pi]['text']
-                        # 호환성: 중성에는 모음 또는 glide만 할당 가능
-                        if not _is_vowel_ipa(pt) and pt not in _GLIDE_IPA:
-                            ok = False; break
-
-                        if pt in _GLIDE_IPA and cursor + 1 < len(word_pis):
-                            # glide + vowel → 하나의 이중모음으로 병합
-                            pi2 = word_pis[cursor + 1]
-                            syl_phones.append((pi, jamo))    # glide → 이중모음 라벨
-                            syl_phones.append((pi2, None))   # vowel → 병합 마커
-                            cursor += 2
-                        else:
-                            # glide 없이 단독 vowel
-                            syl_phones.append((pi, jamo))
-                            cursor += 1
-
-                    elif glide and j_consumed:
-                        # ɲ가 /nj/ → j 이미 소비됨, vowel만 취함
-                        if cursor >= len(word_pis):
-                            ok = False; break
-                        pi = word_pis[cursor]
-                        pt = phones[pi]['text']
-                        # 호환성: 모음 IPA만 허용
-                        if not _is_vowel_ipa(pt):
-                            ok = False; break
-                        syl_phones.append((pi, jamo))
-                        cursor += 1
-                        j_consumed = False
-
-                    else:
-                        # 단모음: 1 phone
-                        if cursor >= len(word_pis):
-                            ok = False; break
-                        pi = word_pis[cursor]
-                        pt = phones[pi]['text']
-                        # 호환성: 중성에는 모음 또는 glide만 할당 가능
-                        if not _is_vowel_ipa(pt) and pt not in _GLIDE_IPA:
-                            ok = False; break
-                        syl_phones.append((pi, jamo))
-                        cursor += 1
-                        j_consumed = False
-
-                # ── 종성(받침) ──
-                elif pos in ('coda', 'coda2'):
-                    if cursor < len(word_pis):
-                        pi = word_pis[cursor]
-                        pt = phones[pi]['text']
-                        # 호환성: 종성에는 자음 IPA만 할당 가능
-                        if _is_vowel_ipa(pt):
-                            # 종성에 모음이 오면 → 해당 종성은 연음 등으로 사라진 것
-                            # phone을 소비하지 않고 건너뜀
-                            pass
-                        else:
-                            syl_phones.append((pi, jamo))
-                            cursor += 1
-                    else:
-                        # 종성 phone 부족 → 연음/축약으로 사라진 경우
-                        # ok 유지, 해당 종성은 건너뜀
-                        pass
-
-                # ── 기타 (비한글 문자) ──
-                elif pos == 'other':
-                    if cursor < len(word_pis):
-                        pi = word_pis[cursor]
-                        syl_phones.append((pi, jamo))
-                        cursor += 1
-
-            if not ok:
+        # ── spn 존재 여부 확인 ──
+        word_has_spn = False
+        for pi, p in enumerate(phones):
+            pt = (p.get('text', '') or '').strip()
+            if pt == 'spn' and p['start'] >= w_start - _EPS and p['end'] <= w_end + _EPS:
+                word_has_spn = True
                 break
-            syl_result.append((syl_char, syl_phones))
 
-        # 남은 phone이 있으면 alignment 실패
-        if cursor < len(word_pis):
-            ok = False
+        # ── greedy alignment (spn이 있으면 세그먼트별 정렬) ──
+        if word_has_spn and len(syl_specs) > 0:
+            # ── 어절 내 phones를 spn 기준으로 세그먼트 분리 ──
+            word_all_pis = []         # [(pi, is_spn)]
+            for pi, p in enumerate(phones):
+                if pi in assignment:
+                    continue
+                pt = (p.get('text', '') or '').strip()
+                if pt.lower() in _SILENT_MARKS:
+                    continue
+                if p['start'] >= w_start - _EPS and p['end'] <= w_end + _EPS:
+                    word_all_pis.append((pi, pt == 'spn'))
 
-        # ── 정렬 결과 반영 ──
-        if ok and syl_result:
+            # 연속된 real/spn 세그먼트로 그룹화
+            segments = []  # [{'type': 'real'|'spn', 'pis': [pi, ...]}]
+            for pi, is_spn in word_all_pis:
+                seg_type = 'spn' if is_spn else 'real'
+                if segments and segments[-1]['type'] == seg_type:
+                    segments[-1]['pis'].append(pi)
+                else:
+                    segments.append({'type': seg_type, 'pis': [pi]})
+
+            # 각 real 세그먼트를 적절한 음절 범위에 매칭
+            # spn 세그먼트는 syl_cursor를 전진시키지 않음 —
+            # sliding start가 IPA-한글 호환성으로 올바른 음절을 찾고,
+            # _fill_spn_gaps가 누락 음절을 spn 시간대에 배치합니다.
+            syl_cursor = 0      # syl_specs 내 현재 위치
+            syl_result = []
+            ok = True
+
+            for seg in segments:
+                if seg['type'] == 'spn':
+                    continue    # syl_cursor 전진 없이 건너뜀
+
+                # real 세그먼트: syl_cursor 부터 sliding start
+                seg_pis = seg['pis']
+                best_seg_result = []
+                best_seg_start = syl_cursor
+                best_seg_ok = False
+
+                for start_idx in range(
+                        max(0, syl_cursor), len(syl_specs)):
+                    trial_result, trial_ok = _try_greedy(
+                        syl_specs[start_idx:], seg_pis, phones)
+                    if trial_ok:
+                        best_seg_result = trial_result
+                        best_seg_start = start_idx
+                        best_seg_ok = True
+                        break
+                    if len(trial_result) > len(best_seg_result):
+                        best_seg_result = trial_result
+                        best_seg_start = start_idx
+
+                syl_result.extend(best_seg_result)
+                syl_cursor = best_seg_start + len(best_seg_result)
+                if not best_seg_ok:
+                    ok = False
+        else:
+            # spn이 없으면 기존대로 처음부터 greedy
+            syl_result, ok = _try_greedy(syl_specs, word_pis, phones)
+
+        # ── 정렬 결과 반영 (부분 정렬도 보존) ──
+        if syl_result:
             for syl_char, sp in syl_result:
                 for pi, label in sp:
                     assignment[pi] = label
@@ -732,12 +961,22 @@ def build_kr_and_syllables(phones, words_restored):
                         'end':   phones[pis[-1]]['end'],
                         'text':  syl_char
                     })
-        else:
-            # fallback: 기존 IPA2KR + count 기반 음절 분할
-            for pi in word_pis:
-                pt = phones[pi]['text']
-                assignment[pi] = IPA2KR.get(pt, pt)
-            _fallback_syllables(syl_specs, word_pis, phones, syllables)
+        if not ok:
+            # 미할당 phone 에 대해서만 IPA2KR fallback
+            unassigned_pis = [pi for pi in word_pis if pi not in assignment]
+            if unassigned_pis:
+                for pi in unassigned_pis:
+                    pt = phones[pi]['text']
+                    assignment[pi] = IPA2KR.get(pt, pt)
+                remaining_specs = syl_specs[len(syl_result):]
+                _fallback_syllables(remaining_specs, unassigned_pis, phones, syllables)
+
+        # ── spn 후보정: 누락된 음절을 spn 구간에서 복원 ──
+        _fill_spn_gaps(w_text, phones, assignment, syllables,
+                       w_start, w_end, spn_expansion)
+
+    # ── 음절을 시간순 정렬 (spn 후보정으로 추가된 항목 포함) ──
+    syllables.sort(key=lambda s: s['start'])
 
     # ── phones_kr 구성 ──
     phones_kr = []
@@ -747,7 +986,11 @@ def build_kr_and_syllables(phones, words_restored):
         if pt.lower() in _SILENT_MARKS:
             phones_kr.append({'start': p['start'], 'end': p['end'], 'text': ''})
         elif pt == 'spn':
-            phones_kr.append({'start': p['start'], 'end': p['end'], 'text': 'spn'})
+            if i in spn_expansion:
+                for sub_start, sub_end, label in spn_expansion[i]:
+                    phones_kr.append({'start': sub_start, 'end': sub_end, 'text': label})
+            else:
+                phones_kr.append({'start': p['start'], 'end': p['end'], 'text': 'spn'})
         elif i in assignment:
             label = assignment[i]
             if label is None:
@@ -762,6 +1005,11 @@ def build_kr_and_syllables(phones, words_restored):
                 'start': p['start'], 'end': p['end'],
                 'text': IPA2KR.get(pt, pt)
             })
+
+    # ── float 정밀도 보정: 인접 구간 경계 스냅 ──
+    for idx in range(1, len(phones_kr)):
+        if abs(phones_kr[idx - 1]['end'] - phones_kr[idx]['start']) < 1e-6:
+            phones_kr[idx]['start'] = phones_kr[idx - 1]['end']
 
     return phones_kr, syllables
 

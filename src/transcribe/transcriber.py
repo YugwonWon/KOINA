@@ -10,11 +10,15 @@ IntonationTranscriber 클래스와 process_files 오케스트레이션 함수를
 """
 
 import os
+import re
 import json
 import csv
 import traceback
 import multiprocessing as mp
 from pathlib import Path
+
+# TextGrid 출력 시 제거할 구두점 패턴
+_PUNCT_RE = re.compile(r'[^\w\s]', re.UNICODE)
 
 import parselmouth
 from tqdm import tqdm
@@ -126,7 +130,8 @@ class IntonationTranscriber:
         momel_path: str = MOMEL_PATH,
     ):
         self.wav_file = wav_file
-        self.transcript = transcript
+        # 구두점 제거: TextGrid에는 한글과 공백만 포함
+        self.transcript = re.sub(r'\s+', ' ', _PUNCT_RE.sub('', transcript)).strip()
         self.output_textgrid = output_textgrid
         self.momel_path = momel_path
         self.textgrid = TextGrid()

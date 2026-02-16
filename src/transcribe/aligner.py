@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import json
-import os, signal, shutil
+import os, re, signal, shutil
 from pathlib import Path
 import subprocess, tempfile, uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import soundfile as sf
 from textgrid import TextGrid
 from utils.ipa2kr import ipa2kr, ipa_sequence_to_kr, build_kr_and_syllables
+
+# MFA lab 파일 및 어절 비교 시 제거할 구두점 패턴
+_PUNCT_RE = re.compile(r'[^\w\s]', re.UNICODE)
 
 from utils.logger import main_logger
 logger = main_logger.getChild('aligner')
@@ -101,7 +104,11 @@ class MFAAligner:
             dst.parent.mkdir(parents=True, exist_ok=True)
             
             self._safe_wav(src, dst)
-            (dst.with_suffix(".lab")).write_text(txt, 'utf-8')
+            # MFA는 구두점을 인식하지 못하므로 lab 파일에서 제거
+            lab_txt = _PUNCT_RE.sub('', txt)
+            # 구두점 제거로 생긴 연속 공백 정리
+            lab_txt = re.sub(r'\s+', ' ', lab_txt).strip()
+            (dst.with_suffix(".lab")).write_text(lab_txt, 'utf-8')
             return (True, src.name, None)
         except Exception as e:
             return (False, Path(wav).name, str(e))
@@ -223,38 +230,43 @@ class MFAAligner:
 
             return {"words": words, "phonemes": phonemes}
 
+def _strip_punct(s):
+    """비교용: 구두점을 제거한 문자열 반환"""
+    return _PUNCT_RE.sub('', s)
+
+
 def restore_eojeols(word_ivls, transcript):
     """
-    MFA word intervals → transcript 의 공백 토큰 순서에 맞춰 ‘어절’ 복원
+    MFA word intervals → transcript 의 공백 토큰 순서에 맞춰 '어절' 복원
     * 침묵 interval(text=="")은 start/end 계산에는 포함하지만
       토큰 결합·비교에는 완전히 무시
+    * 비교 시 구두점(쉼표, 마침표 등)을 무시하여 MFA 출력과 매칭
     """
-    tokens = transcript.strip().split()        # ['나는', '실력있는', …]
-    tok_idx = 0                                # 다음에 만들어야 할 어절 index
+    tokens = transcript.strip().split()
+    # 비교용 구두점 제거 토큰 (출력은 원본 tokens 사용)
+    tokens_clean = [_strip_punct(t) for t in tokens]
+    tok_idx = 0
     buf_txt, buf_start, buf_end = "", None, None
     out = []
 
     for iv in word_ivls:
-        # 침묵 interval → 길이만 end 로 확장, 내용 결합은 skip
         if iv["text"] == "":
             if buf_start is not None:
                 buf_end = iv["end"]
             continue
 
-        # 첫 실음절 interval이면 start 기록
         if buf_start is None:
             buf_start = iv["start"]
 
         buf_end = iv["end"]
-        buf_txt += iv["text"]                  # 공백 없는 순수 음절 / 어절 이어붙이기
+        buf_txt += iv["text"]
 
-        # 현재 버퍼가 목표 token 과 일치하면 flush
-        if tok_idx < len(tokens) and buf_txt == tokens[tok_idx]:
-            out.append({"start": buf_start, "end": buf_end, "text": buf_txt})
+        # 구두점 무시 비교
+        if tok_idx < len(tokens) and buf_txt == tokens_clean[tok_idx]:
+            out.append({"start": buf_start, "end": buf_end, "text": tokens_clean[tok_idx]})
             tok_idx += 1
-            buf_txt, buf_start = "", None      # 버퍼 초기화
+            buf_txt, buf_start = "", None
 
-    # 남은 버퍼(끝이 무음으로 끝나는 경우) 처리
     if buf_start is not None:
         out.append({"start": buf_start, "end": buf_end, "text": buf_txt})
 
