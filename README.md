@@ -183,16 +183,16 @@ out/
 ## 6. Cites
 
 - 아래의 DOI 또는 BibTeX를 통해 인용해주세요.
-- DOI: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15034862.svg)](https://doi.org/10.5281/zenodo.15034862)
+- DOI: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18666913.svg)](https://doi.org/10.5281/zenodo.18666913)
 - BibTeX:
 
 ```bibtex
 @misc{KOINA,
   author = {Won, YuGwon},
   title = {KOINA: Korean Intonation Annotator},
-  year = {2025},
-  version = {v1.0.0},
-  doi = {\url{https://doi.org/10.5281/zenodo.15034862}},
+  year = {2026},
+  version = {v1.1.0},
+  doi = {\url{https://doi.org/10.5281/zenodo.18666913}},
   journal = {Github repository},
   note = {\url{https://github.com/YugwonWon/KOINA}}
 }
