@@ -1,3 +1,5 @@
+
+
 # KOINA (Korean Intonation Annotator)
 
 <p align="center">
@@ -56,8 +58,8 @@ KOINA(Korean Intonation Annotator, 한국어 억양 주석기)는 한국어 억�
 | **1. Docker Desktop / Docker Engine 설치**           | [https://docs.docker.com/get-docker/](https://docs.docker.com/get-docker/)                                                                                                                                                                                                         |
 | **2. 이미지 받기**                                   | ``docker pull linky1584/koina:latest``                                                                                                                                                                                                                                          |
 | **3-A. Intel/AMD PC에서 실행**                       | ``docker run --rm -p 40080:40080 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest``                                                                                                                                                                           |
-| **3-B. Apple Silicon(M1/M2) 맥 / ARM 서버에서 실행** | QEMU 에뮬레이션으로 amd64 이미지를 구동합니다.<br /><br />`docker run --rm --platform linux/amd64 -p 40080:40080 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest`<br /><br />**Tip ** : 첫 구동 시 다운로드·초기화 때문에 2-3분 정도 걸릴 수 있습니다. |
-| **4. 웹 UI 접속**                                    | 브라우저에[http://localhost:40080](http://localhost:40080) 입력 → 파일 업로드·실행                                                                                                                                                                                               |
+| **3-B. Apple Silicon(M1/M2) 맥 / ARM 서버에서 실행** | QEMU 에뮬레이션으로 amd64 이미지를 구동합니다.<br /><br />`docker run --rm --platform linux/amd64 -p 40080:40080 -v /your/audio/path:/koina/out --name koina linky1584/koina:latest`<br /><br />**Tip:** 첫 구동 시 다운로드·초기화 때문에 2-3분 정도 걸릴 수 있습니다. |
+| **4. 웹 UI 접속**                                    | 브라우저에 [http://localhost:40080](http://localhost:40080) 입력 → 파일 업로드·실행                                                                                                                                                                                               |
 | **5. 컨테이너 종료**                                 | 터미널에서 `Ctrl + C` 또는 다른 쉘에서 `docker stop koina`                                                                                                                                                                                                                  |
 
 2. 정상 접속 화면
@@ -123,7 +125,7 @@ out/
    - Windows PowerShell·macOS Terminal·Linux bash 모두 동일합니다.
 3. Conda 가상환경 생성 & 패키지 설치
 
-   ```
+   ```bash
    # 3-1) 새 환경 생성
    conda create -y -n koina python=3.10
    conda activate koina
@@ -151,11 +153,11 @@ out/
 - transcriber.py에는 억양 전사를 위한 핵심 로직이 포함되어 있으며, 터미널(또는 커맨드라인)에서 argument를 지정해 실행할 수 있습니다. 예시 명령어는 다음과 같습니다:
 
 ```bash
-   python ./src/transcribe/transcriber.py \
-    data/input.tsv \
-    --wav_root_dir data/source-audio \
-    --save_dir out/results \
-    --n_jobs 4
+python ./src/transcribe/transcriber.py \
+  data/input.tsv \
+  --wav_root_dir data/source-audio \
+  --save_dir out/results \
+  --n_jobs 4
 ```
 
 | 인자 | 설명 | 기본값 |
